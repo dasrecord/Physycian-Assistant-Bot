@@ -1,0 +1,52 @@
+# ── Secrets ──────────────────────────────────────────────────
+.env
+
+# ── Patient data (NEVER commit audio or session files) ───────
+sessions/audio/
+sessions/*.json
+sessions/*.webm
+sessions/*.wav
+sessions/*.mp3
+
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── Virtual environments ──────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Whisper model cache (large weight files) ─────────────────
+# Models are auto-downloaded on first run — no need to commit
+*.bin
+*.pt
+*.onnx
+*.ot
+huggingface_cache/
+model_cache/
+
+# ── OS artifacts ─────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+nul
+
+# ── IDE / Editor ─────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Logs ─────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Build artifacts ───────────────────────────────────────────
+dist/
+build/
+*.egg-info/

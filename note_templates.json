@@ -1,0 +1,47 @@
+[
+  {
+    "id": "standard",
+    "name": "Standard Family Medicine",
+    "description": "General family medicine SOAP note",
+    "icon": "stethoscope",
+    "is_builtin": true,
+    "system_prompt_extra": "",
+    "output_format": ""
+  },
+  {
+    "id": "mental_health",
+    "name": "Mental Health / Psychiatry",
+    "description": "Includes Mental Status Exam section",
+    "icon": "brain",
+    "is_builtin": true,
+    "system_prompt_extra": "This is a psychiatric or mental health encounter. Always include a full Mental Status Exam (MSE) after the Objective section. Use evidence-based psychiatric terminology. Include PHQ-9 or GAD-7 scores if mentioned.",
+    "output_format": "S:\n[Chief complaint, onset, duration, severity. Psychiatric history, current medications, substance use, social history, trauma history, suicidal/homicidal ideation (SI/HI), family psychiatric history. Items not discussed -> Not reported.]\n\nO:\nVitals: [if taken]\n\nMENTAL STATUS EXAM:\n- Appearance: [grooming, dress, hygiene]\n- Behaviour: [eye contact, psychomotor activity]\n- Speech: [rate, rhythm, volume, tone]\n- Mood: [patient's stated mood in quotes]\n- Affect: [congruent/incongruent, range, intensity]\n- Thought Process: [linear/tangential/circumstantial/flight of ideas]\n- Thought Content: [SI/HI, delusions, obsessions, phobias]\n- Perceptions: [hallucinations A/V/T, illusions]\n- Cognition: [orientation, memory, concentration, insight]\n- Insight & Judgement: [intact/impaired]\n\nA:\n[Primary psychiatric diagnosis] - ICD9: [code]\n[Secondary diagnoses] - ICD9: [code]\nDDx: [Diagnosis 1], [Diagnosis 2], [Diagnosis 3]\n\nP:\n- Medications: [psychiatric meds, dose, frequency]\n- Therapy: [CBT/DBT/supportive etc. if discussed]\n- Safety plan: [if SI/HI discussed]\n- Referrals: [psychiatry, psychology, social work]\n- Follow-up: [interval]\n\nICD9_CODES: [comma-separated list of every ICD9 code used above]\n"
+  },
+  {
+    "id": "neurology",
+    "name": "Neurology",
+    "description": "Includes detailed Neurological Examination section",
+    "icon": "activity",
+    "is_builtin": true,
+    "system_prompt_extra": "This is a neurological encounter. Always include a full Neurological Examination section after the Objective vitals. Use standard neurological terminology.",
+    "output_format": "S:\n[Chief complaint, onset, duration, severity, progression. Neurological history, headache features, seizure history, syncope, weakness, sensory changes, gait problems. Items not discussed -> Not reported.]\n\nO:\nVitals: [if taken]\n\nNEURO EXAM:\n- Mental status: [alert/oriented x3, MMSE if done]\n- Cranial nerves: [CN I-XII findings or Not examined]\n- Motor: [bulk, tone, power 0-5/5 by region]\n- Reflexes: [DTRs, Babinski, Hoffman]\n- Sensation: [light touch, pin-prick, proprioception, vibration]\n- Coordination: [finger-nose, heel-shin, rapid alternating]\n- Gait: [normal/ataxic/steppage/antalgic]\n- Special tests: [Romberg, Kernig, Brudzinski if performed]\n\nA:\n[Primary neurological diagnosis] - ICD9: [code]\n[Secondary diagnoses] - ICD9: [code]\nDDx: [Diagnosis 1], [Diagnosis 2], [Diagnosis 3]\n\nP:\n- Investigations: [MRI/CT/EEG/NCS/EMG if ordered]\n- Medications: [neuro meds if prescribed]\n- Referrals: [neurology, neurosurgery if applicable]\n- Patient education: [topics covered]\n- Follow-up: [interval]\n\nICD9_CODES: [comma-separated list of every ICD9 code used above]\n"
+  },
+  {
+    "id": "pediatric",
+    "name": "Pediatric",
+    "description": "Paediatric encounter with growth and development focus",
+    "icon": "heart",
+    "is_builtin": true,
+    "system_prompt_extra": "This is a paediatric encounter. Include growth parameters (weight, height, head circumference, percentiles) if mentioned. Note developmental milestones if discussed. Use age-appropriate medication dosing. Include immunisation status if mentioned.",
+    "output_format": "S:\n[Chief complaint, onset, duration. Birth history (if relevant), developmental history, immunisation status, diet, school performance. PMHx, current medications, allergies, FHx, SHx. Items not discussed -> Not reported.]\n\nO:\nVitals: [temp, HR, RR, SpO2, weight (kg), height (cm), head circumference (if <2y), percentiles]\n[Physical examination findings]\n\nA:\n[Primary diagnosis] - ICD9: [code]\n[Secondary diagnoses] - ICD9: [code]\nDDx: [Diagnosis 1], [Diagnosis 2], [Diagnosis 3]\n\nP:\n- Investigations: [if ordered]\n- Medications: [weight-based dosing if prescribed]\n- Immunisations: [if discussed]\n- Referrals: [paediatrics, subspecialties]\n- Caregiver education: [topics covered]\n- Follow-up: [interval and return precautions]\n\nICD9_CODES: [comma-separated list of every ICD9 code used above]\n"
+  },
+  {
+    "id": "urgent_care",
+    "name": "Urgent / Acute Care",
+    "description": "Focused urgent care or walk-in SOAP note",
+    "icon": "zap",
+    "is_builtin": true,
+    "system_prompt_extra": "This is an urgent or acute care encounter. Be concise and action-oriented. Prioritise acute management and disposition (discharged/referred/admitted). Include triage category if mentioned.",
+    "output_format": "S:\n[Chief complaint, acuity, onset, duration. Relevant PMHx, current meds, allergies. Items not discussed -> Not reported.]\n\nO:\nVitals: [all vitals especially relevant to chief complaint]\n[Focused physical examination]\n\nA:\n[Primary diagnosis] - ICD9: [code]\nDDx: [Diagnosis 1], [Diagnosis 2], [Diagnosis 3]\n\nP:\n- Immediate management: [treatments given in office/ER]\n- Investigations: [ordered]\n- Medications: [prescribed or given]\n- Disposition: [discharged/referred/admitted]\n- Return precautions: [specific warning signs to return]\n\nICD9_CODES: [comma-separated list of every ICD9 code used above]\n"
+  }
+]

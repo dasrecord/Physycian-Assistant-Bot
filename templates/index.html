@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PhysAI</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <span class="topbar-brand">&#9877; PhysAI</span>
+  <span id="status-message" class="status-msg">Ready.</span>
+  <div class="topbar-right">
+    <span id="pill-whisper" class="pill pill-off">&#127908; Whisper</span>
+    <div class="model-wrap">
+      <button id="pill-ollama" class="pill pill-off" onclick="toggleModelPopover()">
+        &#129302; <span id="pill-model-name">Ollama</span><span id="pill-model-badge" class="badge-warn hidden">!</span>
+      </button>
+      <div id="model-popover" class="popover hidden">
+        <div class="popover-title">Switch model</div>
+        <div id="model-list"></div>
+        <div id="ram-note" class="popover-note"></div>
+      </div>
+    </div>
+    <span id="pill-oscar" class="pill pill-off">&#128196; OSCAR</span>
+    <span id="el-timer" class="timer">00:00</span>
+  </div>
+</header>
+
+<main class="workspace">
+
+  <!-- LEFT PANEL -->
+  <div class="left-panel">
+
+    <!-- Patient -->
+    <div class="card">
+      <div class="patient-row">
+        <input id="patient-name" type="text" placeholder="Patient name" autocomplete="off" />
+        <input id="patient-dob" type="date" title="Date of birth" />
+        <input id="health-card" type="text" placeholder="Health card #" autocomplete="off" />
+      </div>
+      <div class="options-row">
+        <select id="visit-type" title="Visit type">
+          <option value="standard" selected>Standard visit</option>
+          <option value="prolonged">Prolonged (16-30 min)</option>
+          <option value="counselling">Counselling (30+ min)</option>
+          <option value="urgent">Urgent / Acute</option>
+        </select>
+        <select id="template-select" title="Note template"></select>
+        <button class="btn-link" onclick="openTemplateModal()">Templates</button>
+      </div>
+    </div>
+
+    <!-- Recording -->
+    <div class="card">
+      <canvas id="waveform" width="360" height="56"></canvas>
+      <div class="rec-row">
+        <button id="btn-record" class="btn btn-record">&#9679; Start Recording</button>
+        <button id="btn-stop"   class="btn btn-stop" disabled>&#9632; Stop</button>
+      </div>
+      <audio id="audio-player" controls class="hidden"></audio>
+      <div id="post-record-actions" class="hidden">
+        <button id="btn-retranscribe" class="btn btn-ghost btn-sm">&#8635; Re-transcribe</button>
+        <button id="btn-regenerate"   class="btn btn-ghost btn-sm">&#10227; Regenerate</button>
+      </div>
+    </div>
+
+    <!-- Transcript -->
+    <div class="card flex-grow">
+      <label class="field-label">Transcript</label>
+      <textarea id="transcript" class="transcript-area" placeholder="Transcript appears here after recording, or paste one..."></textarea>
+      <div id="auto-generate-bar" class="auto-bar hidden">
+        <span id="auto-generate-text">Generating in 3s&#8230;</span>
+        <button class="btn-link" onclick="cancelAutoGenerate()">Cancel</button>
+        <div class="countdown-track"><div id="countdown-progress" class="countdown-fill"></div></div>
+      </div>
+      <button id="btn-generate" class="btn btn-primary" disabled>&#128196; Generate SOAP Note</button>
+    </div>
+
+  </div>
+
+  <!-- RIGHT PANEL -->
+  <div class="right-panel">
+    <div class="card note-card">
+      <div class="note-header">
+        <span class="field-label">SOAP Note</span>
+        <div class="note-actions">
+          <button id="btn-copy"    class="btn btn-ghost btn-sm" disabled>&#128203; Copy</button>
+          <button id="btn-oscar"   class="btn btn-oscar btn-sm" disabled>&#8594; OSCAR</button>
+          <button id="btn-billing" class="btn btn-billing btn-sm" disabled>&#128179; Billing</button>
+        </div>
+      </div>
+      <textarea id="note-full" class="note-area" placeholder="SOAP note will stream here as the AI generates it&#8230;&#10;&#10;Paste a transcript on the left and click Generate, or record a consultation."></textarea>
+      <div id="icd9-row" class="icd9-row hidden">
+        <span class="icd9-label">ICD-9</span>
+        <div id="icd9-chips" class="icd9-chips"></div>
+      </div>
+      <div id="billing-upgrade-bar" class="upgrade-bar hidden">
+        &#9888;&#65039; Long or complex visit &mdash;
+        <button class="btn-link" onclick="submitBilling()">Submit billing claim</button>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- Template modal -->
+<div id="template-modal" class="modal hidden" onclick="closeTemplateModal(event)">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <div class="modal-hdr">
+      <h3>Note Templates</h3>
+      <button class="modal-close" onclick="closeTemplateModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="template-list" class="tpl-list"></div>
+      <hr class="divider" />
+      <h4 class="section-title">New custom template</h4>
+      <label class="form-label">ID (no spaces)<input id="tpl-id" placeholder="my_template" /></label>
+      <label class="form-label">Name<input id="tpl-name" placeholder="My Template" /></label>
+      <label class="form-label">Description<input id="tpl-desc" /></label>
+      <label class="form-label">Extra system instructions<textarea id="tpl-extra" rows="3" placeholder="Additional AI instructions for this template..."></textarea></label>
+      <label class="form-label">Output format (leave blank to use standard S/O/A/P)<textarea id="tpl-format" rows="5" placeholder="S:
+...
+O:
+..."></textarea></label>
+      <button class="btn btn-primary" onclick="saveCustomTemplate()">Save Template</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/socket.io.min.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+# ──────────────────────────────────────────────
+# Physician Assistant Bot — Dependencies
+# All AI runs 100 % locally (no API fees)
+# ──────────────────────────────────────────────
+
+# Web server + real-time comms
+flask>=3.0.0
+flask-socketio>=5.3.6
+eventlet>=0.35.2
+
+# Local speech-to-text (Whisper, runs on CPU)
+faster-whisper>=1.0.0
+
+# Audio processing / format conversion
+pydub>=0.25.1          # requires ffmpeg in PATH — see SETUP.md
+
+# Local LLM client (talks to Ollama running on localhost)
+requests>=2.31.0
+ollama>=0.2.0
+
+# OSCAR Pro / Brave browser automation (mirrors billing bot)
+selenium>=4.25.0
+webdriver-manager>=4.0.1
+undetected-chromedriver>=3.5.0
+
+# Shared with billing bot
+python-dotenv>=1.0.0
+openpyxl>=3.1.0
+
+# Utilities
+numpy>=1.26.0
+
+psutil>=5.9.0

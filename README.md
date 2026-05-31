@@ -25,7 +25,7 @@ git clone https://github.com/YOUR_USERNAME/physai.git
 cd physai
 bash setup.sh       # one-time setup (installs Ollama, pulls model, creates venv)
 bash start.sh       # start the server
-# Open http://localhost:5000
+# Open http://localhost:5001
 ```
 
 ### Windows
@@ -35,7 +35,7 @@ git clone https://github.com/YOUR_USERNAME/physai.git
 cd physai
 setup.bat           :: one-time setup
 start.bat           :: start the server
-:: Open http://localhost:5000
+:: Open http://localhost:5001
 ```
 
 ---
@@ -68,7 +68,7 @@ Key options in `.env`:
 ```env
 OLLAMA_MODEL=llama3.2:3b      # or llama3.1:8b if you have ≥5 GB RAM
 WHISPER_MODEL=medium.en        # tiny.en → large-v3 (tradeoff: speed vs accuracy)
-PORT=5000
+PORT=5001
 ```
 
 ---

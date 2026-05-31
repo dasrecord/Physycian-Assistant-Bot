@@ -1,6 +1,6 @@
 """
 main.py -- Physician Assistant Bot
-Local Flask/SocketIO server.  Open http://localhost:5000 in any browser.
+Local Flask/SocketIO server.  Open http://localhost:5001 in any browser.
 """
 
 import os
@@ -692,4 +692,5 @@ if __name__ == "__main__":
         get_soap().warmup()
     threading.Thread(target=_warmup_delayed, daemon=True).start()
 
-    socketio.run(app, host="0.0.0.0", port=PORT, debug=True, use_reloader=True, reloader_type='stat')
+    socketio.run(app, host="0.0.0.0", port=PORT, debug=True, use_reloader=True, reloader_type='stat', allow_unsafe_werkzeug=True)
+z

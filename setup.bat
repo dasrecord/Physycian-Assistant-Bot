@@ -92,7 +92,7 @@ echo.
 echo   Next steps:
 echo     1. Edit .env with your OSCAR Pro URL + credentials
 echo     2. Run:  python main.py
-echo     3. Open: http://localhost:5000
+echo     3. Open: http://localhost:5001
 echo  ===================================================
 echo.
 pause

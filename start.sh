@@ -25,7 +25,7 @@ fi
 
 echo ""
 echo "  Starting PhysAI..."
-echo "  Open http://localhost:5000 in your browser"
+echo "  Open http://localhost:5001 in your browser"
 echo ""
 
 # Use /usr/bin/python3 explicitly — it has all packages installed

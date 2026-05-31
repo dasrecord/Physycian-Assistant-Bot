@@ -76,13 +76,11 @@ Health Card: 9743702042"></textarea>
     <!-- Recording -->
     <div class="card">
       <div class="waveform-dual">
-        <div class="waveform-lane">
+        <div class="waveform-lane" style="flex-direction: row; gap: 16px;">
           <span class="waveform-label">Dr</span>
-          <canvas id="waveform" width="360" height="44"></canvas>
-        </div>
-        <div class="waveform-lane">
+          <canvas id="waveform" width="180" height="44"></canvas>
           <span class="waveform-label">Pt</span>
-          <canvas id="waveform-pt" width="360" height="44"></canvas>
+          <canvas id="waveform-pt" width="180" height="44"></canvas>
         </div>
       </div>
       <div class="rec-row">
@@ -107,6 +105,7 @@ Health Card: 9743702042"></textarea>
 
     <!-- Transcript -->
     <div class="card flex-grow">
+      <button class="btn btn-next-pt" onclick="clearForNextPatient()" title="Clear all fields for the next patient encounter">&#43; Next Patient</button>
       <label class="field-label">Transcript</label>
       <textarea id="transcript" class="transcript-area" placeholder="Transcript appears here after recording, or paste one..."></textarea>
       <div id="auto-generate-bar" class="auto-bar hidden">
@@ -115,7 +114,6 @@ Health Card: 9743702042"></textarea>
         <div class="countdown-track"><div id="countdown-progress" class="countdown-fill"></div></div>
       </div>
       <button id="btn-generate" class="btn btn-primary" disabled>&#128196; Generate SOAP Note</button>
-      <button class="btn btn-next-pt" onclick="clearForNextPatient()" title="Clear all fields for the next patient encounter">&#43; Next Patient</button>
     </div>
 
     <!-- History -->

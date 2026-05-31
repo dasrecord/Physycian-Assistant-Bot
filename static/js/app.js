@@ -469,6 +469,8 @@ async function clearForNextPatient() {
   $('patient-email').value = '';
   $('service-date').value  = '';
   $('service-time').value  = '';
+  // Patient-submitted info
+  if ($('patient-submitted-info')) $('patient-submitted-info').value = '';
   // Transcript + note
   $('transcript').value = '';
   $('note-full').value  = '';

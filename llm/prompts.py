@@ -95,9 +95,9 @@ def build_soap_prompt(transcript, patient_name="", template_config=None, patient
             "\n==============================\n"
             "PATIENT-SUPPLIED INFORMATION (provided by patient, e.g., intake form, email):\n"
             "(Format: bullet points or labeled fields. Example: 'Allergies: No known drug allergies')\n"
-            f"{patient_submitted_info}\n"
+            f"{patient_submitted_info.strip()}\n"
             "==============================\n"
-            "\nIMPORTANT: You MUST extract and merge all clinically relevant details from BOTH the transcript and the patient-supplied info. For each SOAP section (especially Allergies, Medications, PMHx, SHx), always check both sources. If the patient-supplied info contains allergy or medication details, ensure they are reflected in the note, unless contradicted by the transcript. If both sources mention the same field, prefer the transcript.\n"
+            " IMPORTANT: You MUST extract and merge all clinically relevant details from BOTH the transcript and the patient-supplied info. For each SOAP section (especially Allergies, Medications, PMHx, SHx), always check both sources. If the patient-supplied info contains allergy or medication details, ensure they are reflected in the note, unless contradicted by the transcript. If both sources mention the same field, prefer the transcript."
         )
     prompt += (
         f"Generate the note now. Exact format required, no extra commentary:\n\n"

@@ -3,6 +3,7 @@
 
 # ── Patient data (NEVER commit audio or session files) ───────
 sessions/audio/
+sessions/notes/*.json
 sessions/*.json
 sessions/*.webm
 sessions/*.wav

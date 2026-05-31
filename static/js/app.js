@@ -339,9 +339,9 @@ function _parsePatientText(raw) {
     if (dob) out.dob = `${dob[3]}-${dob[2].padStart(2,'0')}-${dob[1].padStart(2,'0')}`;
   }
 
-  // Health card
-  const hc = flat.match(/Health\s*Card[:\s]+([0-9A-Z][\w -]{0,20})/i);
-  if (hc) out.healthCard = hc[1].replace(/\s+/g, '').trim();
+  // Health card (BC: exactly 10 digits)
+  const hc = flat.match(/Health\s*Card[:\s]+([0-9]{10})/i);
+  if (hc) out.healthCard = hc[1];
 
   // Email — plain or extracted from markdown
   const em = flat.match(/[\w.+-]+@[\w-]+\.[\w.]+/);
@@ -500,6 +500,7 @@ $('btn-generate').addEventListener('click', () => { cancelAutoGenerate(); genera
 async function generateNote() {
   if (isGenerating) return;
   const transcript = $('transcript').value.trim();
+  const patientSubmittedInfo = $('patient-submitted-info').value.trim();
   if (!transcript) { setStatus('No transcript to generate from.', 'warn'); return; }
   isGenerating = true;
   $('btn-generate').disabled = true;
@@ -511,6 +512,7 @@ async function generateNote() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       transcript,
+      patient_submitted_info: patientSubmittedInfo,
       template_id:  $('template-select').value,
       socket_id:    socket.id,
       patient_name: $('patient-name').value.trim(),
@@ -551,6 +553,7 @@ function _fixSubheadings(text) {
 
 function renderNote(note) {
   let text = '';
+  // Helper to bullet each line of content
   if (note.subjective) text += 'S:\n' + note.subjective + '\n\n';
   if (note.objective)  text += 'O:\n' + note.objective  + '\n\n';
   for (const [key, content] of Object.entries(note.extra_sections || {})) {
@@ -956,6 +959,11 @@ async function loadLatestAudio() {
   await loadTemplates();
   updatePills();
   loadHistory();
-  loadLatestAudio();
+  // loadLatestAudio(); // Removed auto-restore
   setInterval(updatePills, 30000);
 })();
+
+// Add restore button logic
+window.restoreLastRecording = async function() {
+  await loadLatestAudio();
+}

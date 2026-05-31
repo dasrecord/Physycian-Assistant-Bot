@@ -13,6 +13,8 @@ SOAP_SYSTEM_PROMPT = (
     "2. NEVER fabricate ANY information not explicitly stated in the transcript. "
     "If a piece of information was not mentioned, write Not reported (for history) "
     "or Not examined (for exam findings). "
+    "If a medication, term, or concept is unclear, misspelled, or unknown, do NOT guess or invent. "
+    "Instead, write: Unknown medication: [original text] or Unknown term: [original text]. "
     "NEVER write phrases like appears well-nourished, no acute distress, chest clear to auscultation, "
     "abdomen soft non-tender, normal range of motion, or ANY other exam finding "
     "unless the transcript explicitly states a physical examination was performed.\n"
@@ -77,16 +79,28 @@ def get_system_prompt(template_config=None):
     return base
 
 
-def build_soap_prompt(transcript, patient_name="", template_config=None):
+def build_soap_prompt(transcript, patient_name="", template_config=None, patient_submitted_info=None):
     pt_line = f"Patient: {patient_name}\n" if patient_name else ""
     output_format = (
         template_config.get("output_format") or _BASE_FORMAT
         if template_config else _BASE_FORMAT
     )
-    return (
+    prompt = (
         f"{pt_line}Analyse the following doctor-patient consultation transcript and generate "
         f"a complete clinical note. Strictly follow ALL rules from the system prompt.\n\n"
         f"=== TRANSCRIPT ===\n{transcript}\n=== END TRANSCRIPT ===\n\n"
+    )
+    if patient_submitted_info:
+        prompt += (
+            "\n==============================\n"
+            "PATIENT-SUPPLIED INFORMATION (provided by patient, e.g., intake form, email):\n"
+            "(Format: bullet points or labeled fields. Example: 'Allergies: No known drug allergies')\n"
+            f"{patient_submitted_info}\n"
+            "==============================\n"
+            "\nIMPORTANT: You MUST extract and merge all clinically relevant details from BOTH the transcript and the patient-supplied info. For each SOAP section (especially Allergies, Medications, PMHx, SHx), always check both sources. If the patient-supplied info contains allergy or medication details, ensure they are reflected in the note, unless contradicted by the transcript. If both sources mention the same field, prefer the transcript.\n"
+        )
+    prompt += (
         f"Generate the note now. Exact format required, no extra commentary:\n\n"
         f"{output_format}\n"
     )
+    return prompt

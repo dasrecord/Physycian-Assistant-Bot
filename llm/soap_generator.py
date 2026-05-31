@@ -36,16 +36,16 @@ class SOAPGenerator:
         self.model = model
         self.api_url = f"{OLLAMA_URL}/api/generate"
 
-    def generate(self, transcript, patient_name="", template_config=None):
+    def generate(self, transcript, patient_name="", template_config=None, patient_submitted_info=None):
         """Blocking generation -- returns fully parsed note dict."""
-        prompt = build_soap_prompt(transcript, patient_name, template_config)
+        prompt = build_soap_prompt(transcript, patient_name, template_config, patient_submitted_info=patient_submitted_info)
         system = get_system_prompt(template_config)
         raw = self._call_ollama(prompt, system)
         return self._parse(raw)
 
-    def generate_streaming(self, transcript, patient_name="", template_config=None):
+    def generate_streaming(self, transcript, patient_name="", template_config=None, patient_submitted_info=None):
         """Streaming generation -- yields token strings as they arrive."""
-        prompt = build_soap_prompt(transcript, patient_name, template_config)
+        prompt = build_soap_prompt(transcript, patient_name, template_config, patient_submitted_info=patient_submitted_info)
         system = get_system_prompt(template_config)
         yield from self._call_ollama_streaming(prompt, system)
 

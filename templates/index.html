@@ -62,6 +62,17 @@ Health Card: 9743702042"></textarea>
   <!-- LEFT PANEL -->
   <div class="left-panel">
 
+    <!-- Patient-submitted info (optional) -->
+    <div class="card">
+      <label class="field-label" for="patient-submitted-info">Patient-submitted info (optional)</label>
+      <textarea id="patient-submitted-info" class="patient-info-area" rows="3" placeholder="Paste any info the patient submitted here (e.g., intake form, email, etc.)"></textarea>
+    </div>
+
+    <!-- Restore last recording button -->
+    <div class="card">
+      <button class="btn btn-ghost btn-sm" onclick="restoreLastRecording()" title="Restore the last audio recording and note">&#8635; Restore Last Recording</button>
+    </div>
+
     <!-- Recording -->
     <div class="card">
       <div class="waveform-dual">

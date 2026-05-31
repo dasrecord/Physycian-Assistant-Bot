@@ -434,6 +434,7 @@ def generate_note():
     transcript = data.get("transcript") or session.get("transcript", "")
     template_id = data.get("template_id", "standard")
     target_sid = data.get("socket_id") or None  # emit only to requesting client
+    patient_supplied_info = data.get("patient_submitted_info", "")
     if not transcript.strip():
         return jsonify({"error": "No transcript available"}), 400
 
@@ -441,6 +442,34 @@ def generate_note():
     for field in ("patient_name", "patient_dob", "health_card", "visit_type"):
         if data.get(field) is not None:
             session[field] = str(data[field]).strip()
+
+    # --- Pre-process: extract and merge key fields from patient-supplied info into transcript ---
+    def extract_field(text, field_names):
+        for name in field_names:
+            pattern = rf"{name}[:\s\-]*([^\n]*)"
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        return None
+
+    merged_transcript = transcript
+    if patient_supplied_info:
+        # Allergies
+        allergies = extract_field(patient_supplied_info, ["Allergies", "Medication Allergies"])
+        if allergies and ("allerg" not in transcript.lower() or "not reported" in transcript.lower()):
+            merged_transcript += f"\nPatient reports allergies: {allergies}"
+        # Medications
+        meds = extract_field(patient_supplied_info, ["Medications", "Current medications"])
+        if meds and ("medication" not in transcript.lower() or "not reported" in transcript.lower()):
+            merged_transcript += f"\nPatient reports medications: {meds}"
+        # PMHx
+        pmhx = extract_field(patient_supplied_info, ["Past Medical History", "PMHx"])
+        if pmhx and ("pmhx" not in transcript.lower() or "not reported" in transcript.lower()):
+            merged_transcript += f"\nPatient reports PMHx: {pmhx}"
+        # SHx
+        shx = extract_field(patient_supplied_info, ["Social History", "SHx"])
+        if shx and ("shx" not in transcript.lower() or "not reported" in transcript.lower()):
+            merged_transcript += f"\nPatient reports SHx: {shx}"
 
     _generating = True
 
@@ -458,9 +487,10 @@ def generate_note():
             raw_tokens = []
             buf = []
             for token in get_soap().generate_streaming(
-                transcript=transcript,
+                transcript=merged_transcript,
                 patient_name=session.get("patient_name", ""),
                 template_config=template_config,
+                patient_submitted_info=patient_supplied_info,
             ):
                 raw_tokens.append(token)
                 buf.append(token)

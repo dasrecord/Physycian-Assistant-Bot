@@ -11,6 +11,10 @@ eventlet>=0.35.2
 # Local speech-to-text (Whisper, runs on CPU)
 faster-whisper>=1.0.0
 
+# Apple Silicon GPU acceleration for Whisper (M1/M2/M3 — optional but recommended)
+# pip install mlx-whisper
+mlx-whisper>=0.4.0
+
 # Audio processing / format conversion
 pydub>=0.25.1          # requires ffmpeg in PATH — see SETUP.md
 

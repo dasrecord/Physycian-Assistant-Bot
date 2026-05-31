@@ -12,12 +12,12 @@ import requests
 from config import OLLAMA_MODEL, OLLAMA_URL
 from llm.prompts import get_system_prompt, build_soap_prompt
 
-_ICD9_RE = re.compile(r"ICD9[:\s]+([0-9]{3,5}(?:\.[0-9]{1,2})?)", re.IGNORECASE)
-_ICD9_LIST_RE = re.compile(r"ICD9_CODES\s*:\s*([0-9.,\s]+)", re.IGNORECASE)
+_ICD9_RE = re.compile(r"ICD-?9(?:[\s_-]*(?:CM|code[s]?))?[:\s]+([0-9]{3,5}(?:\.[0-9]{1,2})?)" , re.IGNORECASE)
+_ICD9_LIST_RE = re.compile(r"ICD-?9[_\s-]*CODES?\s*:\s*([0-9.,\s]+)", re.IGNORECASE)
 
 _HEADER_RE = re.compile(
     r"^(S|SUBJECTIVE|O|OBJECTIVE|A|ASSESSMENT|P|PLAN"
-    r"|MENTAL STATUS EXAM|NEURO EXAM|ICD9_CODES)[:\s]*",
+    r"|MENTAL STATUS EXAM|NEURO EXAM|ICD9_CODES):\s*",
     re.IGNORECASE | re.MULTILINE,
 )
 _KEY_MAP = {

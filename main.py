@@ -4,6 +4,7 @@ Local Flask/SocketIO server.  Open http://localhost:5000 in any browser.
 """
 
 import os
+import re
 import sys
 import json
 import uuid
@@ -11,7 +12,8 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, render_template, request, jsonify
+import tempfile
+from flask import Flask, render_template, request, jsonify, send_file
 from flask_socketio import SocketIO, emit
 
 from config import PORT, AUDIO_DIR, SESSION_DIR, OLLAMA_MODEL, OLLAMA_URL
@@ -19,9 +21,13 @@ from transcription.stt import WhisperTranscriber
 from llm.soap_generator import SOAPGenerator
 from emr.oscar import OscarEMR
 
+NOTES_DIR = os.path.join(SESSION_DIR, "notes")
+os.makedirs(NOTES_DIR, exist_ok=True)
+
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.urandom(32)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading",
+                    ping_timeout=120, ping_interval=60,
                     max_http_buffer_size=50 * 1024 * 1024)
 
 _stt = None
@@ -59,12 +65,16 @@ def get_oscar():
 def _recommend_model():
     try:
         import psutil
-        gb = psutil.virtual_memory().available / (1024 ** 3)
-        if gb < 3.5:
+        total_gb  = psutil.virtual_memory().total     / (1024 ** 3)
+        avail_gb  = psutil.virtual_memory().available / (1024 ** 3)
+        # Use total unified memory as the cap so we don't over-recommend
+        # models that won't fit (e.g. 70b needs ~48 GB)
+        cap = min(total_gb, avail_gb * 1.5)
+        if cap < 4:
             return "llama3.2:3b"
-        elif gb < 10:
+        elif cap < 12:
             return "llama3.1:8b"
-        elif gb < 24:
+        elif cap < 48:
             return "llama3.2:11b"
         else:
             return "llama3.1:70b"
@@ -78,6 +88,201 @@ def _get_available_gb():
         return round(psutil.virtual_memory().available / (1024 ** 3), 1)
     except ImportError:
         return None
+
+
+# ── Note history ─────────────────────────────────────────────────────────────
+
+def _save_note(sess, note):
+    """Persist a completed note to NOTES_DIR as JSON."""
+    try:
+        safe_name = sess.get("patient_name", "unknown").replace(" ", "_")[:20]
+        ts = datetime.now().isoformat()
+        fname = f"{ts[:10]}_{sess.get('id','x')}_{safe_name}.json"
+        entry = {
+            "session_id":    sess.get("id", ""),
+            "patient_name":  sess.get("patient_name", ""),
+            "patient_dob":   sess.get("patient_dob", ""),
+            "health_card":   sess.get("health_card", ""),
+            "visit_type":    sess.get("visit_type", "standard"),
+            "timestamp":     ts,
+            "soap_note":     note,
+            "transcript":    sess.get("transcript", ""),
+            "audio_filename": os.path.basename(sess.get("audio_path", "") or ""),
+        }
+        with open(os.path.join(NOTES_DIR, fname), "w", encoding="utf-8") as f:
+            json.dump(entry, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        print(f"[history] auto-save failed: {exc}")
+
+
+def _note_summary(soap_note: dict) -> str:
+    """Extract a one-liner case summary from a soap_note dict."""
+    if not isinstance(soap_note, dict):
+        return ""
+    for field in ("assessment", "subjective"):
+        text = soap_note.get(field, "")
+        if not text:
+            continue
+        for raw_line in text.splitlines():
+            line = raw_line.strip().lstrip("-•*# ").strip()
+            if not line or len(line) < 4:
+                continue
+            # Skip DDx / header lines
+            if re.match(r'^(ddx|differential|assessment|plan|s:|o:|a:|p:)', line, re.I):
+                continue
+            # Clean trailing ICD code parenthetical for brevity if line is long
+            clean = re.sub(r'\s*\(ICD-?9?:?\s*[\d.,\s]+\)', '', line).strip().rstrip(',:;')
+            return (clean or line)[:72]
+    return ""
+
+
+@app.route("/api/history", methods=["GET"])
+def get_history():
+    """Return saved notes. ?date=YYYY-MM-DD (default today) or ?date=all"""
+    date_filter = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
+    entries = []
+    try:
+        for fname in sorted(os.listdir(NOTES_DIR), reverse=True):
+            if not fname.endswith(".json"):
+                continue
+            if date_filter != "all" and not fname.startswith(date_filter):
+                continue
+            with open(os.path.join(NOTES_DIR, fname), encoding="utf-8") as f:
+                data = json.load(f)
+            soap = data.get("soap_note", {})
+            entries.append({
+                "session_id":   data.get("session_id", ""),
+                "patient_name": data.get("patient_name") or "",
+                "timestamp":    data.get("timestamp", ""),
+                "icd9_codes":   soap.get("icd9_codes", []),
+                "visit_type":   data.get("visit_type", ""),
+                "summary":      _note_summary(soap),
+                "filename":     fname,
+            })
+    except Exception as exc:
+        print(f"[history] list failed: {exc}")
+    return jsonify(entries)
+
+
+@app.route("/api/history/<path:filename>", methods=["GET"])
+def get_history_note(filename):
+    """Return a specific saved note by filename."""
+    if ".." in filename or "/" in filename or "\\" in filename:
+        return jsonify({"error": "Invalid filename"}), 400
+    fpath = os.path.join(NOTES_DIR, filename)
+    if not os.path.isfile(fpath):
+        return jsonify({"error": "Not found"}), 404
+    with open(fpath, encoding="utf-8") as f:
+        return jsonify(json.load(f))
+
+
+@app.route("/api/history/<path:filename>", methods=["DELETE"])
+def delete_history_note(filename):
+    """Delete a saved note."""
+    if ".." in filename or "/" in filename or "\\" in filename:
+        return jsonify({"error": "Invalid filename"}), 400
+    fpath = os.path.join(NOTES_DIR, filename)
+    if not os.path.isfile(fpath):
+        return jsonify({"error": "Not found"}), 404
+    os.remove(fpath)
+    return jsonify({"status": "deleted"})
+
+
+@app.route("/api/history/<path:filename>", methods=["PATCH"])
+def update_history_note(filename):
+    """Update editable fields (patient_name, patient_dob, health_card, visit_type) in a saved note."""
+    if ".." in filename or "/" in filename or "\\" in filename:
+        return jsonify({"error": "Invalid filename"}), 400
+    fpath = os.path.join(NOTES_DIR, filename)
+    if not os.path.isfile(fpath):
+        return jsonify({"error": "Not found"}), 404
+    updates = request.get_json(force=True)
+    with open(fpath, encoding="utf-8") as f:
+        note = json.load(f)
+    for field in ("patient_name", "patient_dob", "health_card", "visit_type"):
+        if field in updates:
+            note[field] = str(updates[field]).strip()
+    with open(fpath, "w", encoding="utf-8") as f:
+        json.dump(note, f, ensure_ascii=False, indent=2)
+    return jsonify({"status": "updated"})
+
+
+@app.route("/api/update-session", methods=["POST"])
+def update_session_fields():
+    """Update patient fields in the active session without clearing transcript/audio."""
+    data = request.get_json(force=True)
+    for field in ("patient_name", "patient_dob", "health_card", "visit_type"):
+        if data.get(field) is not None:
+            session[field] = str(data[field]).strip()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/audio/latest", methods=["GET"])
+def get_latest_audio():
+    """Return the most recently saved session audio file (any date)."""
+    try:
+        files = [
+            f for f in os.listdir(AUDIO_DIR)
+            if f.startswith("session_") and f.endswith(".webm")
+        ]
+        if not files:
+            return jsonify({"filename": None})
+        files.sort(key=lambda f: os.path.getmtime(os.path.join(AUDIO_DIR, f)), reverse=True)
+        return jsonify({"filename": files[0]})
+    except Exception as exc:
+        return jsonify({"filename": None, "error": str(exc)})
+
+
+@app.route("/api/audio/<path:filename>", methods=["GET"])
+def get_audio(filename):
+    """Serve a saved audio file by name."""
+    if ".." in filename or "/" in filename or "\\" in filename:
+        return jsonify({"error": "Invalid filename"}), 400
+    fpath = os.path.join(AUDIO_DIR, filename)
+    if not os.path.isfile(fpath):
+        return jsonify({"error": "Not found"}), 404
+    return send_file(fpath, mimetype="audio/webm")
+
+
+@app.route("/api/retranscribe", methods=["POST"])
+def retranscribe():
+    """Re-run transcription on a saved audio file (no blob upload needed)."""
+    data = request.get_json(force=True)
+    filename = data.get("filename", "")
+    if not filename or ".." in filename or "/" in filename or "\\" in filename:
+        return jsonify({"error": "Invalid filename"}), 400
+    fpath = os.path.join(AUDIO_DIR, filename)
+    if not os.path.isfile(fpath):
+        return jsonify({"error": "Audio file not found"}), 404
+    session["audio_path"] = fpath
+
+    diarize = data.get("diarize", True)
+
+    _TRANSCRIBE_TIMEOUT = 300  # 5 minutes max
+
+    def _redo():
+        socketio.emit("status", {"msg": "Re-transcribing audio...", "level": "info"})
+        result = {}
+        def _work():
+            try:
+                result["transcript"] = get_stt().transcribe(fpath, diarize=diarize)
+            except Exception as exc:
+                result["error"] = str(exc)
+        t = threading.Thread(target=_work, daemon=True)
+        t.start()
+        t.join(timeout=_TRANSCRIBE_TIMEOUT)
+        if t.is_alive():
+            socketio.emit("status", {"msg": "Transcription timed out (audio may be corrupted).", "level": "error"})
+            return
+        if "error" in result:
+            socketio.emit("status", {"msg": f"Transcription error: {result['error']}", "level": "error"})
+            return
+        session["transcript"] = result["transcript"]
+        socketio.emit("transcript_ready", {"transcript": result["transcript"]})
+        socketio.emit("status", {"msg": "Transcription complete.", "level": "success"})
+
+    threading.Thread(target=_redo, daemon=True).start()
+    return jsonify({"status": "transcribing"})
 
 
 def _load_templates():
@@ -133,17 +338,23 @@ def transcribe_chunk():
     audio_data = request.get_data()
     if not audio_data:
         return jsonify({"error": "No audio data"}), 400
-    tmp_path = os.path.join(AUDIO_DIR, f"live_{session.get('id','x')}.webm")
-    with open(tmp_path, "wb") as f:
-        f.write(audio_data)
 
     def _live():
+        # Use a temp file so live chunks don't create permanent duplicates
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".webm")
         try:
+            with os.fdopen(tmp_fd, "wb") as f:
+                f.write(audio_data)
             transcript = get_stt().transcribe(tmp_path)
             session["transcript"] = transcript
             socketio.emit("partial_transcript", {"transcript": transcript})
         except Exception as exc:
             socketio.emit("status", {"msg": f"Live transcription: {exc}", "level": "warn"})
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     threading.Thread(target=_live, daemon=True).start()
     return jsonify({"status": "transcribing"})
@@ -152,6 +363,7 @@ def transcribe_chunk():
 @app.route("/api/stop-recording", methods=["POST"])
 def stop_recording():
     # Primary path: frontend sends the full audio blob in the request body
+    no_diarize = request.args.get("no_diarize") == "1"
     body = request.get_data()
     if body and len(body) > 512:
         sid = session.get("id", "x")
@@ -166,7 +378,7 @@ def stop_recording():
         def _final():
             socketio.emit("status", {"msg": "Transcribing audio...", "level": "info"})
             try:
-                transcript = get_stt().transcribe(audio_path)
+                transcript = get_stt().transcribe(audio_path, diarize=not no_diarize)
                 session["transcript"] = transcript
                 socketio.emit("transcript_ready", {"transcript": transcript})
                 socketio.emit("status", {"msg": "Transcription complete.", "level": "success"})
@@ -225,6 +437,11 @@ def generate_note():
     if not transcript.strip():
         return jsonify({"error": "No transcript available"}), 400
 
+    # Prefer patient fields sent by the client (always current DOM values)
+    for field in ("patient_name", "patient_dob", "health_card", "visit_type"):
+        if data.get(field) is not None:
+            session[field] = str(data[field]).strip()
+
     _generating = True
 
     def _generate():
@@ -256,6 +473,7 @@ def generate_note():
             raw = "".join(raw_tokens)
             note = get_soap()._parse(raw)
             session["soap_note"] = note
+            _save_note(session.copy(), note)
             socketio.emit("note_ready", note, to=target_sid)
             socketio.emit("status", {"msg": "Note generated. Review, edit, then post.", "level": "success"}, to=target_sid)
         except Exception as exc:
@@ -302,15 +520,26 @@ def submit_billing():
     pt_dob     = data.get("patient_dob")  or session.get("patient_dob",  "")
     hc         = data.get("health_card")  or session.get("health_card",  "")
     visit_type = data.get("visit_type")   or session.get("visit_type", "standard")
-    duration   = data.get("duration_minutes", 0)
+
+    # Derive timing from server session (more reliable than client timer)
+    sess_start   = session.get("start_time", "")
+    date_svc     = sess_start[:10] if len(sess_start) >= 10 else datetime.now().strftime("%Y-%m-%d")
+    start_hm     = sess_start[11:16] if len(sess_start) >= 16 else ""   # "HH:MM"
+    end_hm       = datetime.now().strftime("%H:%M")
 
     def _bill():
         socketio.emit("status", {"msg": "Submitting billing...", "level": "info"})
         try:
             from billing import submit_billing as do_billing
             result = do_billing(
-                patient_name=pt_name, patient_dob=pt_dob, health_card=hc,
-                icd9_codes=icd9, visit_type=visit_type, duration_minutes=duration,
+                patient_name=pt_name,
+                patient_dob=pt_dob,
+                health_card=hc,
+                icd9_codes=icd9,
+                visit_type=visit_type,
+                date_of_service=date_svc,
+                start_time=start_hm,
+                end_time=end_hm,
             )
             socketio.emit("billing_result", result)
             socketio.emit("status", {"msg": "Billing submitted.", "level": "success"})
@@ -429,8 +658,8 @@ if __name__ == "__main__":
     # Warmup Ollama in background so first generation is fast
     def _warmup_delayed():
         import time
-        time.sleep(6)
+        time.sleep(2)  # brief pause so Flask finishes starting
         get_soap().warmup()
     threading.Thread(target=_warmup_delayed, daemon=True).start()
 
-    socketio.run(app, host="0.0.0.0", port=PORT, debug=False)
+    socketio.run(app, host="0.0.0.0", port=PORT, debug=True, use_reloader=True, reloader_type='stat')

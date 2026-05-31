@@ -3,13 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PhysAI</title>
+  <title>DAS_DONE</title>
+  <link rel="icon" href="data:," />
   <link rel="stylesheet" href="/static/css/style.css" />
 </head>
 <body>
 
 <header class="topbar">
-  <span class="topbar-brand">&#9877; PhysAI</span>
+  <span class="topbar-brand">&#9877; DAS DONE</span>
   <span id="status-message" class="status-msg">Ready.</span>
   <div class="topbar-right">
     <span id="pill-whisper" class="pill pill-off">&#127908; Whisper</span>
@@ -28,36 +29,63 @@
   </div>
 </header>
 
+<!-- Patient bar -->
+<div class="patient-bar">
+  <button class="btn-pt-import" onclick="importPatientFromClipboard()" title="Import patient info from clipboard">&#128203;</button>
+  <div id="pt-paste-box" class="pt-paste-box hidden">
+    <textarea id="pt-paste-area" rows="3" placeholder="Paste patient info here…
+Marlow Giesecke , 20 (1/11/2005), Male
+* General Appointment
+Health Card: 9743702042"></textarea>
+    <div class="pt-paste-actions">
+      <button class="btn btn-primary btn-sm" onclick="applyPatientPaste()">Apply</button>
+      <button class="btn btn-ghost btn-sm" onclick="$('pt-paste-box').classList.add('hidden')">Cancel</button>
+    </div>
+  </div>
+  <input id="patient-name" type="text" placeholder="Patient name" autocomplete="off" />
+  <input id="patient-dob" type="date" title="Date of birth" />
+  <input id="health-card" type="text" placeholder="Health card #" autocomplete="off" />
+  <div class="patient-bar-divider"></div>
+  <input id="service-date" type="date" title="Date of service" />
+  <input id="service-time" type="time" title="Start time" />
+  <input id="patient-email" type="email" placeholder="Patient email" autocomplete="off" />
+  <select id="visit-type" title="Visit type">
+    <option value="standard" selected>Standard</option>
+    <option value="counselling">Counselling</option>
+  </select>
+  <select id="template-select" title="Note template"></select>
+  <button class="btn-link" onclick="openTemplateModal()">Templates</button>
+</div>
+
 <main class="workspace">
 
   <!-- LEFT PANEL -->
   <div class="left-panel">
 
-    <!-- Patient -->
-    <div class="card">
-      <div class="patient-row">
-        <input id="patient-name" type="text" placeholder="Patient name" autocomplete="off" />
-        <input id="patient-dob" type="date" title="Date of birth" />
-        <input id="health-card" type="text" placeholder="Health card #" autocomplete="off" />
-      </div>
-      <div class="options-row">
-        <select id="visit-type" title="Visit type">
-          <option value="standard" selected>Standard visit</option>
-          <option value="prolonged">Prolonged (16-30 min)</option>
-          <option value="counselling">Counselling (30+ min)</option>
-          <option value="urgent">Urgent / Acute</option>
-        </select>
-        <select id="template-select" title="Note template"></select>
-        <button class="btn-link" onclick="openTemplateModal()">Templates</button>
-      </div>
-    </div>
-
     <!-- Recording -->
     <div class="card">
-      <canvas id="waveform" width="360" height="56"></canvas>
+      <div class="waveform-dual">
+        <div class="waveform-lane">
+          <span class="waveform-label">Dr</span>
+          <canvas id="waveform" width="360" height="44"></canvas>
+        </div>
+        <div class="waveform-lane">
+          <span class="waveform-label">Pt</span>
+          <canvas id="waveform-pt" width="360" height="44"></canvas>
+        </div>
+      </div>
       <div class="rec-row">
-        <button id="btn-record" class="btn btn-record">&#9679; Start Recording</button>
+        <button id="btn-call-mode" class="btn btn-ghost btn-sm call-mode-btn call-mode-active"
+          onclick="toggleCallMode()"
+          title="Captures patient voice from your calling tab (e.g. Doxy.me) as a separate stereo channel — eliminates guesswork in diarization.">
+          📞 Phone call: ON
+        </button>
+      </div>
+      <div class="rec-row">
+        <button id="btn-record" class="btn btn-record">&#9679; Start</button>
+        <button id="btn-pause"  class="btn btn-pause hidden">&#9646;&#9646; Pause</button>
         <button id="btn-stop"   class="btn btn-stop" disabled>&#9632; Stop</button>
+        <button id="btn-cancel" class="btn btn-cancel hidden" title="Cancel and discard this recording">&#10005;</button>
       </div>
       <audio id="audio-player" controls class="hidden"></audio>
       <div id="post-record-actions" class="hidden">
@@ -76,6 +104,28 @@
         <div class="countdown-track"><div id="countdown-progress" class="countdown-fill"></div></div>
       </div>
       <button id="btn-generate" class="btn btn-primary" disabled>&#128196; Generate SOAP Note</button>
+      <button class="btn btn-next-pt" onclick="clearForNextPatient()" title="Clear all fields for the next patient encounter">&#43; Next Patient</button>
+    </div>
+
+    <!-- History -->
+    <div class="card history-card">
+      <div class="history-hdr">
+        <div class="history-hdr-title" onclick="toggleHistory()">
+          <span class="field-label">&#128203; Patients</span>
+          <span id="history-count" class="history-badge hidden">0</span>
+          <span id="history-chevron" class="history-chevron">&#9660;</span>
+        </div>
+        <input type="date" id="history-date-pick" class="history-date-pick" title="Filter by date (clear for all dates)" />
+      </div>
+      <div id="history-list" class="history-list hidden"></div>
+    </div>
+
+    <!-- Keyboard shortcuts hint -->
+    <div class="kbd-hint">
+      <span><kbd>Space</kbd> Rec</span>
+      <span><kbd>G</kbd> Generate</span>
+      <span><kbd>C</kbd> Copy</span>
+      <span><kbd>Esc</kbd> Cancel</span>
     </div>
 
   </div>

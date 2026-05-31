@@ -28,4 +28,5 @@ echo "  Starting PhysAI..."
 echo "  Open http://localhost:5000 in your browser"
 echo ""
 
-python3 main.py
+# Use /usr/bin/python3 explicitly — it has all packages installed
+/usr/bin/python3 main.py

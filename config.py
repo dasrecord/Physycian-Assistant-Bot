@@ -3,7 +3,7 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 # ── OSCAR Pro ────────────────────────────────────────────────
 OSCAR_URL       = os.getenv("OSCAR_URL", "")
@@ -22,7 +22,7 @@ OLLAMA_URL   = os.getenv("OLLAMA_URL", "http://localhost:11434")
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "medium.en")
 
 # ── Server ───────────────────────────────────────────────────
-PORT = int(os.getenv("PORT", 5000))
+PORT = int(os.getenv("PORT", 5001))
 
 # ── Paths ────────────────────────────────────────────────────
 BASE_DIR     = os.path.dirname(__file__)

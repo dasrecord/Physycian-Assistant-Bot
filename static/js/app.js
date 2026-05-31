@@ -11,11 +11,19 @@ let timerInterval       = null;
 let timerSeconds        = 0;
 let liveInterval        = null;
 let analyser            = null;
+let analyserPt          = null;
 let animFrame           = null;
 let currentNote         = null;
 let autoGenerateTimeout = null;
 let lastAudioBlob       = null;
+let loadedAudioFilename = null;
 let isGenerating        = false;
+let isPhoneCall         = true;    // phone call mode — capture patient audio from browser tab
+let phoneCallSucceeded  = null;    // null=N/A, true=stereo merged OK, false=fallback mono
+let patientStream       = null;    // patient audio stream for waveform
+let mergeCtx            = null;    // Web Audio context used for stereo merge
+let isPaused            = false;   // recording is paused
+let cancelPending       = false;   // recording is being cancelled (discard data)
 
 const $ = id => document.getElementById(id);
 
@@ -53,6 +61,7 @@ socket.on('note_ready', note => {
   cancelAutoGenerate();
   checkBillingUpgrade();
   setStatus('Note ready. Review, edit, then post.', 'success');
+  loadHistory();
 });
 
 socket.on('oscar_result',   r => setStatus(r.success ? 'Posted to OSCAR.' : 'OSCAR error: ' + r.error, r.success ? 'success' : 'error'));
@@ -78,19 +87,137 @@ function startTimer() {
 }
 function stopTimer() { clearInterval(timerInterval); }
 
+// ── Phone call mode ──────────────────────────────────────────
+function toggleCallMode() {
+  isPhoneCall = !isPhoneCall;
+  const btn = $('btn-call-mode');
+  btn.textContent = isPhoneCall ? '📞 Phone call: ON' : '📞 Phone call: OFF';
+  btn.classList.toggle('call-mode-active', isPhoneCall);
+  if (isPhoneCall) {
+    setStatus('Phone call mode ON — when recording starts, select your calling tab for patient audio.', 'info');
+  } else {
+    setStatus('Phone call mode OFF — mono recording with pause-based diarization.', 'info');
+  }
+}
+
+/** Try to capture patient audio from a browser tab (getDisplayMedia). Returns a MediaStream or null. */
+async function capturePatientAudio() {
+  try {
+    // Try video:false first (Chrome 107+, all Firefox)
+    return await navigator.mediaDevices.getDisplayMedia({ audio: true, video: false });
+  } catch (_) {}
+  try {
+    // Fallback: Chrome <107 requires video:true — request minimal resolution and drop tracks
+    const s = await navigator.mediaDevices.getDisplayMedia({
+      audio: true,
+      video: { width: 1, height: 1, frameRate: 1 },
+    });
+    s.getVideoTracks().forEach(t => t.stop());
+    return s;
+  } catch (_) {}
+  return null;
+}
+
 // ── Recording ────────────────────────────────────────────────
 $('btn-record').addEventListener('click', startRecording);
+$('btn-pause').addEventListener('click', togglePause);
 $('btn-stop').addEventListener('click', stopRecording);
+$('btn-cancel').addEventListener('click', cancelRecording);
+
+function togglePause() {
+  if (!isRecording) return;
+  if (!isPaused) {
+    mediaRecorder.pause();
+    clearInterval(timerInterval);
+    clearInterval(liveInterval);
+    isPaused = true;
+    $('btn-pause').textContent = '▶ Resume';
+    $('btn-pause').classList.add('resuming');
+    setStatus('Recording paused. Hit Resume to continue.', 'warn');
+  } else {
+    mediaRecorder.resume();
+    // Restart timer from current count (don't reset timerSeconds)
+    timerInterval = setInterval(() => {
+      timerSeconds++;
+      const m = String(Math.floor(timerSeconds / 60)).padStart(2, '0');
+      const s = String(timerSeconds % 60).padStart(2, '0');
+      $('el-timer').textContent = m + ':' + s;
+      if (timerSeconds >= 1200) $('el-timer').classList.add('amber');
+    }, 1000);
+    liveInterval = setInterval(sendLiveChunk, 15000);
+    isPaused = false;
+    $('btn-pause').textContent = '❚❚ Pause';
+    $('btn-pause').classList.remove('resuming');
+    setStatus('Recording resumed.', 'success');
+  }
+}
+
+async function cancelRecording() {
+  if (!isRecording) return;
+  cancelPending = true;
+  isRecording = false;
+  isPaused = false;
+  clearInterval(liveInterval);
+  stopTimer();
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  audioStream.getTracks().forEach(t => t.stop());
+  if (mergeCtx) { mergeCtx.close(); mergeCtx = null; }
+  patientStream = null;
+  audioChunks = [];
+  cancelPending = false;
+  $('btn-record').disabled = false;
+  $('btn-record').classList.remove('active');
+  $('btn-stop').disabled = true;
+  $('btn-pause').classList.add('hidden');
+  $('btn-pause').textContent = '❚❚ Pause';
+  $('btn-pause').classList.remove('resuming');
+  $('btn-cancel').classList.add('hidden');
+  $('el-timer').textContent = '00:00';
+  $('el-timer').classList.remove('amber');
+  setStatus('Recording cancelled.', 'info');
+}
 
 async function startRecording() {
   try { audioStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
   catch (e) { setStatus('Microphone access denied.', 'error'); return; }
 
+  let recordingStream = audioStream;   // default: mic only (mono)
+  phoneCallSucceeded = null;
+
+  if (isPhoneCall) {
+    setStatus('Select the calling tab to capture patient audio…', 'info');
+    const displayStream = await capturePatientAudio();
+    const patTrack = displayStream && displayStream.getAudioTracks()[0];
+    if (patTrack) {
+      // Merge mic → L channel, patient → R channel into a single stereo stream
+      mergeCtx = new AudioContext();
+      const merger = mergeCtx.createChannelMerger(2);
+      mergeCtx.createMediaStreamSource(audioStream).connect(merger, 0, 0);    // mic → left
+      mergeCtx.createMediaStreamSource(new MediaStream([patTrack])).connect(merger, 0, 1);  // patient → right
+      const dest = mergeCtx.createMediaStreamDestination();
+      merger.connect(dest);
+      recordingStream = dest.stream;
+      patientStream = new MediaStream([patTrack]);
+      phoneCallSucceeded = true;
+      setStatus('📞 Phone call mode active — capturing both channels (Dr=L, Pt=R).', 'success');
+    } else {
+      phoneCallSucceeded = false;
+      patientStream = null;
+      setStatus('Could not capture patient audio — recording mic only, no speaker labels.', 'warn');
+    }
+  }
+
   audioChunks = [];
   isRecording = true;
+  isPaused = false;
+  cancelPending = false;
   $('btn-record').disabled = true;
   $('btn-record').classList.add('active');
+  $('btn-pause').classList.remove('hidden');
+  $('btn-pause').textContent = '❚❚ Pause';
+  $('btn-pause').classList.remove('resuming');
   $('btn-stop').disabled = false;
+  $('btn-cancel').classList.remove('hidden');
   $('btn-generate').disabled = true;
   $('audio-player').classList.add('hidden');
   $('post-record-actions').classList.add('hidden');
@@ -107,47 +234,65 @@ async function startRecording() {
   });
 
   startTimer();
-  startWaveform(audioStream);
+  startWaveform(audioStream, patientStream);   // Dr = webcam mic, Pt = tab audio
   liveInterval = setInterval(sendLiveChunk, 15000);
 
-  mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
-  mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+  mediaRecorder = new MediaRecorder(recordingStream, { mimeType: 'audio/webm' });
+  mediaRecorder.ondataavailable = e => { if (e.data.size > 0 && !cancelPending) audioChunks.push(e.data); };
   mediaRecorder.start(1000);
 }
 
 async function sendLiveChunk() {
   if (!audioChunks.length) return;
+  // Skip live preview in phone-call mode: stereo transcription runs two full
+  // whisper passes per chunk and causes memory exhaustion over long sessions.
+  if (phoneCallSucceeded === true) return;
   const blob = new Blob(audioChunks, { type: 'audio/webm' });
+  // Safety cap: skip if accumulated audio exceeds ~20 MB to prevent MLX OOM.
+  if (blob.size > 20 * 1024 * 1024) return;
   fetch('/api/transcribe-chunk', { method: 'POST', body: blob, headers: { 'Content-Type': 'audio/webm' } });
 }
 
 async function stopRecording() {
   if (!isRecording) return;
   isRecording = false;
+  isPaused = false;
   clearInterval(liveInterval);
   stopTimer();
-  mediaRecorder.stop();
+  if (mediaRecorder.state !== 'inactive') mediaRecorder.stop();
   audioStream.getTracks().forEach(t => t.stop());
+  if (mergeCtx) { mergeCtx.close(); mergeCtx = null; }
+  patientStream = null;
   $('btn-record').disabled = false;
-  $('btn-record').classList.remove('active');
-  $('btn-stop').disabled = true;
-  cancelAnimationFrame(animFrame);
 
   const blob = new Blob(audioChunks, { type: 'audio/webm' });
   lastAudioBlob = blob;
+  loadedAudioFilename = null;  // fresh recording — blob is authoritative
   $('audio-player').src = URL.createObjectURL(blob);
   $('audio-player').classList.remove('hidden');
   $('post-record-actions').style.display = 'flex';
   $('post-record-actions').classList.remove('hidden');
 
   setStatus('Processing audio…', 'info');
-  await fetch('/api/stop-recording', { method: 'POST', body: blob, headers: { 'Content-Type': 'audio/webm' } });
+  const stopUrl = (isPhoneCall && phoneCallSucceeded === false)
+    ? '/api/stop-recording?no_diarize=1'
+    : '/api/stop-recording';
+  await fetch(stopUrl, { method: 'POST', body: blob, headers: { 'Content-Type': 'audio/webm' } });
 }
 
 $('btn-retranscribe').addEventListener('click', async () => {
-  if (!lastAudioBlob) return;
-  setStatus('Re-transcribing…', 'info');
-  await fetch('/api/stop-recording', { method: 'POST', body: lastAudioBlob, headers: { 'Content-Type': 'audio/webm' } });
+  if (loadedAudioFilename) {
+    // Server-side retranscribe (works after refresh / loaded from history)
+    setStatus('Re-transcribing…', 'info');
+    await fetch('/api/retranscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: loadedAudioFilename }),
+    });
+  } else if (lastAudioBlob) {
+    setStatus('Re-transcribing…', 'info');
+    await fetch('/api/stop-recording', { method: 'POST', body: lastAudioBlob, headers: { 'Content-Type': 'audio/webm' } });
+  }
 });
 $('btn-regenerate').addEventListener('click', generateNote);
 
@@ -170,10 +315,156 @@ function startAutoGenerate() {
     generateNote();
   }, 3000);
 }
+// ── Patient info import (clipboard / paste) ─────────────────
+function _parsePatientText(raw) {
+  // Normalize: strip markdown links [text](url) → text, collapse runs of whitespace
+  const text = raw.trim()
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')   // [email](mailto:...) → email
+    .replace(/\r/g, '');
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  // Also work on the full text as one line (WELL Health pastes as one blob)
+  const flat = text.replace(/\n/g, ' ');
+  const out = {};
+
+  // Name + DOB: "First Last , 25 (12/4/2001)"
+  const nal = flat.match(/^(.+?)\s*,\s*\d+\s*\((\d{1,2})\/(\d{1,2})\/(\d{4})\)/);
+  if (nal) {
+    out.name = nal[1].trim();
+    // nal[2]=DD, nal[3]=MM, nal[4]=YYYY  →  YYYY-MM-DD
+    out.dob  = `${nal[4]}-${nal[3].padStart(2,'0')}-${nal[2].padStart(2,'0')}`;
+  } else {
+    const nameOnly = (lines[0] || '').replace(/\s*,.*$/, '').trim();
+    if (nameOnly && !/^[\d*@]/.test(nameOnly)) out.name = nameOnly;
+    const dob = flat.match(/\((\d{1,2})\/(\d{1,2})\/(\d{4})\)/);
+    if (dob) out.dob = `${dob[3]}-${dob[2].padStart(2,'0')}-${dob[1].padStart(2,'0')}`;
+  }
+
+  // Health card
+  const hc = flat.match(/Health\s*Card[:\s]+([0-9A-Z][\w -]{0,20})/i);
+  if (hc) out.healthCard = hc[1].replace(/\s+/g, '').trim();
+
+  // Email — plain or extracted from markdown
+  const em = flat.match(/[\w.+-]+@[\w-]+\.[\w.]+/);
+  if (em) out.email = em[0];
+
+  // Service date + time: "May 31, 2:05 PM" or "May 31, 2026, 2:05 PM"
+  const dtMatch = flat.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),?\s*(?:\d{4},?\s*)?(\d{1,2}:\d{2}\s*[AP]M)/i);
+  if (dtMatch) {
+    const monthMap = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
+    const mo = monthMap[dtMatch[1].toLowerCase()];
+    const dy = parseInt(dtMatch[2]);
+    const yr = new Date().getFullYear();
+    const d  = new Date(yr, mo, dy);
+    out.serviceDate = `${yr}-${String(mo+1).padStart(2,'0')}-${String(dy).padStart(2,'0')}`;
+    // Parse time to HH:MM 24h
+    const tm = dtMatch[3].trim();
+    const [hhmm, ampm] = tm.split(/\s+/);
+    let [hh, mm] = hhmm.split(':').map(Number);
+    if (ampm.toUpperCase() === 'PM' && hh !== 12) hh += 12;
+    if (ampm.toUpperCase() === 'AM' && hh === 12) hh = 0;
+    out.serviceTime = `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+  }
+
+  // Visit type
+  if      (/prolonged/i.test(flat))                            out.visitType = 'prolonged';
+  else if (/counsel/i.test(flat))                              out.visitType = 'counselling';
+  else if (/urgent|acute|emerg/i.test(flat))                   out.visitType = 'urgent';
+  else if (/general|standard|routine|appointment/i.test(flat)) out.visitType = 'standard';
+
+  return out;
+}
+
+function _applyPatientData(p) {
+  if (p.name)        $('patient-name').value  = p.name;
+  if (p.dob)         $('patient-dob').value   = p.dob;
+  if (p.healthCard)  $('health-card').value   = p.healthCard;
+  if (p.visitType)   $('visit-type').value    = p.visitType;
+  if (p.email)       $('patient-email').value = p.email;
+  if (p.serviceDate) $('service-date').value  = p.serviceDate;
+  if (p.serviceTime) $('service-time').value  = p.serviceTime;
+  const filled = [p.name && 'name', p.dob && 'DOB', p.healthCard && 'HC', p.email && 'email', p.serviceDate && 'date'].filter(Boolean);
+  if (filled.length) setStatus('Imported: ' + filled.join(', ') + '.', 'success');
+  else               setStatus('Nothing recognized — check format.', 'warn');
+  fetch('/api/update-session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      patient_name: $('patient-name').value,
+      patient_dob:  $('patient-dob').value,
+      health_card:  $('health-card').value,
+      visit_type:   $('visit-type').value,
+    }),
+  }).catch(() => {});
+}
+
+async function importPatientFromClipboard() {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (!text.trim()) { setStatus('Clipboard is empty.', 'warn'); return; }
+    const parsed = _parsePatientText(text);
+    if (parsed.name || parsed.healthCard) {
+      _applyPatientData(parsed);
+    } else {
+      $('pt-paste-area').value = text;
+      $('pt-paste-box').classList.remove('hidden');
+      setStatus('Could not auto-parse — review and click Apply.', 'warn');
+    }
+  } catch (_) {
+    // Clipboard permission denied — show paste box
+    $('pt-paste-area').value = '';
+    $('pt-paste-box').classList.remove('hidden');
+    $('pt-paste-area').focus();
+    setStatus('Paste patient info into the box below.', 'info');
+  }
+}
+
+function applyPatientPaste() {
+  const text = $('pt-paste-area').value;
+  if (!text.trim()) return;
+  _applyPatientData(_parsePatientText(text));
+  $('pt-paste-box').classList.add('hidden');
+  $('pt-paste-area').value = '';
+}
+
 function cancelAutoGenerate() {
   if (autoGenerateTimeout) { clearTimeout(autoGenerateTimeout); autoGenerateTimeout = null; }
   $('auto-generate-bar').classList.add('hidden');
   $('countdown-progress').style.animation = 'none';
+}
+
+function clearForNextPatient() {
+  if (isRecording) return;   // safety: don't clear mid-recording
+  cancelAutoGenerate();
+  // Patient fields
+  $('patient-name').value  = '';
+  $('patient-dob').value   = '';
+  $('health-card').value   = '';
+  $('patient-email').value = '';
+  $('service-date').value  = '';
+  $('service-time').value  = '';
+  // Transcript + note
+  $('transcript').value = '';
+  $('note-full').value  = '';
+  // ICD9 chips
+  $('icd9-chips').innerHTML = '';
+  $('icd9-row').classList.add('hidden');
+  // Audio player
+  $('audio-player').src = '';
+  $('audio-player').classList.add('hidden');
+  $('post-record-actions').classList.add('hidden');
+  // Buttons
+  $('btn-generate').disabled = true;
+  $('btn-copy').disabled     = true;
+  $('btn-oscar').disabled    = true;
+  if ($('btn-billing')) $('btn-billing').disabled = true;
+  // State
+  currentNote         = null;
+  lastAudioBlob       = null;
+  loadedAudioFilename = null;
+  $('el-timer').textContent = '00:00';
+  $('el-timer').classList.remove('amber');
+  setStatus('Ready for next patient.', 'info');
+  $('patient-name').focus();
 }
 
 // ── Generate note ─────────────────────────────────────────────
@@ -191,7 +482,15 @@ async function generateNote() {
   const res = await fetch('/api/generate-note', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ transcript, template_id: $('template-select').value, socket_id: socket.id }),
+    body: JSON.stringify({
+      transcript,
+      template_id:  $('template-select').value,
+      socket_id:    socket.id,
+      patient_name: $('patient-name').value.trim(),
+      patient_dob:  $('patient-dob').value.trim(),
+      health_card:  $('health-card').value.trim(),
+      visit_type:   $('visit-type').value,
+    }),
   });
   if (!res.ok) {
     isGenerating = false;
@@ -202,18 +501,38 @@ async function generateNote() {
 }
 
 // ── Render note ───────────────────────────────────────────────
+// Ensure common medical sub-headings always start on their own line
+const _SUBHEADINGS = [
+  'HPI','PMHx','FHx','SHx','ROS','Allergies','Allergy','Medications','Medication','Meds',
+  'Vitals','Vital signs',
+  'Physical examination','Physical Examination','Physical exam','Physical Exam',
+  'HEENT','Cardiovascular','Respiratory','Abdomen','MSK','Musculoskeletal','Skin','Neuro','Neurological',
+  'Neck','Chest','Lungs','Heart','Back','Extremities','Lymph nodes',
+  'Investigations','Labs','Imaging','Bloodwork',
+  'Referrals','Referral','Follow-up','Follow up','Followup',
+  'Patient education','Return precautions','Sick note','DDx',
+  'Mental status','Mental Status','Cognitive',
+];
+const _SUBHEAD_RE = new RegExp(
+  '([^\\n])[ \\t]*((?:' + _SUBHEADINGS.map(s => s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|') + '):)',
+  'gi'
+);
+function _fixSubheadings(text) {
+  // Run twice in case two adjacent subheadings need fixing after first pass
+  return text.replace(_SUBHEAD_RE, '$1\n$2').replace(_SUBHEAD_RE, '$1\n$2');
+}
+
 function renderNote(note) {
   let text = '';
   if (note.subjective) text += 'S:\n' + note.subjective + '\n\n';
   if (note.objective)  text += 'O:\n' + note.objective  + '\n\n';
-  // Extra sections (MSE, NEURO EXAM) between O and A
   for (const [key, content] of Object.entries(note.extra_sections || {})) {
     const label = key.replace(/_/g, ' ').toUpperCase();
     text += label + ':\n' + content + '\n\n';
   }
   if (note.assessment) text += 'A:\n' + note.assessment + '\n\n';
   if (note.plan)       text += 'P:\n' + note.plan;
-  $('note-full').value = text.trim();
+  $('note-full').value = _fixSubheadings(text.trim());
 
   // ICD9 chips
   const chips = $('icd9-chips');
@@ -254,12 +573,11 @@ async function submitBilling() {
   await fetch('/api/submit-billing', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      soap_note:        currentNote,
-      patient_name:     $('patient-name').value,
-      patient_dob:      $('patient-dob').value,
-      health_card:      $('health-card').value,
-      visit_type:       $('visit-type').value,
-      duration_minutes: Math.floor(timerSeconds / 60),
+      soap_note:    currentNote,
+      patient_name: $('patient-name').value,
+      patient_dob:  $('patient-dob').value,
+      health_card:  $('health-card').value,
+      visit_type:   $('visit-type').value,
     }),
   });
 }
@@ -301,22 +619,37 @@ async function selectModel(name) {
 }
 
 // ── Waveform ──────────────────────────────────────────────────
-function startWaveform(stream) {
+function startWaveform(stream, ptStream) {
   const ac = new AudioContext();
-  analyser = ac.createAnalyser();
-  analyser.fftSize = 256;
-  ac.createMediaStreamSource(stream).connect(analyser);
+  const source = ac.createMediaStreamSource(stream);
+  analyser = ac.createAnalyser(); analyser.fftSize = 256;
+  source.connect(analyser);
+  if (ptStream) {
+    analyserPt = ac.createAnalyser(); analyserPt.fftSize = 256;
+    ac.createMediaStreamSource(ptStream).connect(analyserPt);
+  } else {
+    analyserPt = null;
+  }
   drawWave();
 }
-function drawWave() {
-  animFrame = requestAnimationFrame(drawWave);
-  const canvas = $('waveform');
+function drawOneWave(canvas, node, color) {
+  if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  const data = new Uint8Array(analyser.frequencyBinCount);
-  analyser.getByteTimeDomainData(data);
   ctx.fillStyle = '#1a1d29';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.lineWidth = 1.5; ctx.strokeStyle = '#4a7df5';
+  if (!node) {
+    // no signal — draw flat line
+    ctx.strokeStyle = '#333648';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, canvas.height / 2);
+    ctx.lineTo(canvas.width, canvas.height / 2);
+    ctx.stroke();
+    return;
+  }
+  const data = new Uint8Array(node.frequencyBinCount);
+  node.getByteTimeDomainData(data);
+  ctx.lineWidth = 1.5; ctx.strokeStyle = color;
   ctx.beginPath();
   const slice = canvas.width / data.length;
   let x = 0;
@@ -326,6 +659,11 @@ function drawWave() {
     x += slice;
   });
   ctx.stroke();
+}
+function drawWave() {
+  animFrame = requestAnimationFrame(drawWave);
+  drawOneWave($('waveform'),    analyser,   '#4a7df5');  // Dr — blue
+  drawOneWave($('waveform-pt'), analyserPt, '#3ecf8e');  // Pt — green
 }
 
 // ── Templates ─────────────────────────────────────────────────
@@ -377,9 +715,220 @@ $('transcript').addEventListener('input', () => {
   $('btn-generate').disabled = !$('transcript').value.trim();
 });
 
+// ── Keyboard shortcuts ────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  const tag = document.activeElement ? document.activeElement.tagName : '';
+  const inInput = ['INPUT', 'TEXTAREA', 'SELECT'].includes(tag);
+  const modal = !$('template-modal').classList.contains('hidden');
+  if (modal || inInput) return;
+
+  if (e.key === ' ') {
+    e.preventDefault();
+    if (!isRecording && !$('btn-record').disabled) startRecording();
+    else if (isRecording && !$('btn-stop').disabled) stopRecording();
+  }
+  if (e.key === 'p' || e.key === 'P') {
+    if (isRecording) togglePause();
+  }
+  if (e.key === 'Escape') {
+    if (isRecording) cancelRecording();
+  }
+  if (e.key === 'g' || e.key === 'G') {
+    if (!$('btn-generate').disabled) { cancelAutoGenerate(); generateNote(); }
+  }
+  if (e.key === 'c' || e.key === 'C') {
+    if (!$('btn-copy').disabled)
+      navigator.clipboard.writeText($('note-full').value)
+        .then(() => setStatus('Copied to clipboard.', 'success'));
+  }
+  if (e.key === 'Escape') cancelAutoGenerate();
+});
+
+// ── Patient history ───────────────────────────────────────────
+let _historyOpen = false;
+const _today = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
+let _historyDate = _today; // YYYY-MM-DD local date; empty = all
+
+function _escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Init date picker
+(function () {
+  const pick = $('history-date-pick');
+  if (!pick) return;
+  pick.value = _historyDate;
+  pick.addEventListener('change', () => {
+    _historyDate = pick.value; // '' means all dates
+    if (_historyOpen) loadHistory();
+  });
+})();
+
+function toggleHistory() {
+  _historyOpen = !_historyOpen;
+  $('history-list').classList.toggle('hidden', !_historyOpen);
+  $('history-chevron').textContent = _historyOpen ? '▴' : '▾';
+  if (_historyOpen) loadHistory();
+}
+
+async function loadHistory() {
+  try {
+    const dateParam = _historyDate || 'all';
+    const entries = await fetch('/api/history?date=' + encodeURIComponent(dateParam)).then(r => r.json());
+    const badge = $('history-count');
+    if (entries.length) { badge.textContent = entries.length; badge.classList.remove('hidden'); }
+    else { badge.classList.add('hidden'); }
+    if (!_historyOpen) return;
+    const list = $('history-list');
+    list.innerHTML = '';
+    if (!entries.length) {
+      list.innerHTML = '<div class="history-empty">No patients found.</div>';
+      return;
+    }
+    const showingAll = !_historyDate;
+    let lastDate = null;
+    entries.forEach(e => {
+      const entryDate = e.timestamp ? e.timestamp.slice(0, 10) : '';
+      // Date separator when showing all dates
+      if (showingAll && entryDate && entryDate !== lastDate) {
+        const sep = document.createElement('div');
+        sep.className = 'history-date-sep';
+        const today     = new Date().toISOString().slice(0, 10);
+        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+        if (entryDate === today)           sep.textContent = 'Today';
+        else if (entryDate === yesterday)  sep.textContent = 'Yesterday';
+        else {
+          const d = new Date(entryDate + 'T12:00:00');
+          sep.textContent = d.toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' });
+        }
+        list.appendChild(sep);
+        lastDate = entryDate;
+      }
+      const row = document.createElement('div');
+      row.className = 'history-row';
+      const time    = e.timestamp ? e.timestamp.substring(11, 16) : '';
+      const name    = e.patient_name || 'Unknown';
+      const summary = e.summary || (e.icd9_codes || []).slice(0, 2).join(', ') || '';
+      row.innerHTML =
+        `<div class="hrow-top">` +
+          `<span class="hrow-name">${_escHtml(name)}</span>` +
+          `<span class="hrow-time">${_escHtml(time)}</span>` +
+          `<span class="hrow-actions">` +
+            `<button class="hrow-btn hrow-edit" title="Rename patient">&#9998;</button>` +
+            `<button class="hrow-btn hrow-del"  title="Delete note">&#128465;</button>` +
+          `</span>` +
+        `</div>` +
+        (summary ? `<div class="hrow-summary">${_escHtml(summary)}</div>` : '');
+      row.querySelector('.hrow-edit').addEventListener('click', ev => { ev.stopPropagation(); _historyRename(row, e); });
+      row.querySelector('.hrow-del' ).addEventListener('click', ev => { ev.stopPropagation(); _historyDelete(e.filename, row); });
+      row.addEventListener('click', () => loadHistoryNote(e.filename));
+      list.appendChild(row);
+    });
+  } catch(_) {}
+}
+
+function _historyRename(row, entry) {
+  const nameSpan = row.querySelector('.hrow-name');
+  const original = nameSpan.textContent;
+  const input = document.createElement('input');
+  input.className = 'hrow-rename-input';
+  input.value = original;
+  nameSpan.replaceWith(input);
+  input.focus(); input.select();
+  let saved = false;
+  async function _save() {
+    if (saved) return; saved = true;
+    const newName = input.value.trim() || original;
+    const span = document.createElement('span');
+    span.className = 'hrow-name';
+    span.textContent = newName;
+    input.replaceWith(span);
+    if (newName === original) return;
+    try {
+      await fetch('/api/history/' + encodeURIComponent(entry.filename), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patient_name: newName }),
+      });
+      entry.patient_name = newName;
+      setStatus('Patient name updated.', 'success');
+    } catch(_) { setStatus('Rename failed.', 'error'); }
+  }
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { input.value = original; input.blur(); }
+  });
+  input.addEventListener('blur', _save, { once: true });
+}
+
+async function _historyDelete(filename, row) {
+  if (!confirm('Delete this note? This cannot be undone.')) return;
+  try {
+    const r = await fetch('/api/history/' + encodeURIComponent(filename), { method: 'DELETE' });
+    if (r.ok) {
+      row.remove();
+      const list = $('history-list');
+      const remaining = list.querySelectorAll('.history-row').length;
+      if (!remaining) list.innerHTML = '<div class="history-empty">No patients found.</div>';
+      const badge = $('history-count');
+      if (remaining > 0) badge.textContent = remaining;
+      else badge.classList.add('hidden');
+      setStatus('Note deleted.', 'info');
+    }
+  } catch(_) { setStatus('Delete failed.', 'error'); }
+}
+
+
+async function loadHistoryNote(filename) {
+  try {
+    const data = await fetch('/api/history/' + encodeURIComponent(filename)).then(r => r.json());
+    if (data.patient_name) $('patient-name').value = data.patient_name;
+    if (data.patient_dob)  $('patient-dob').value  = data.patient_dob;
+    if (data.health_card)  $('health-card').value  = data.health_card;
+    if (data.transcript)   $('transcript').value   = data.transcript;
+    if (data.soap_note) {
+      currentNote = data.soap_note;
+      renderNote(data.soap_note);
+      $('btn-copy').disabled    = false;
+      $('btn-oscar').disabled   = false;
+      $('btn-billing').disabled = false;
+    }
+    // Restore audio player if the note has an associated audio file
+    if (data.audio_filename) {
+      loadedAudioFilename = data.audio_filename;
+      lastAudioBlob = null;
+      $('audio-player').src = '/api/audio/' + encodeURIComponent(data.audio_filename);
+      $('audio-player').classList.remove('hidden');
+      $('post-record-actions').style.display = 'flex';
+      $('post-record-actions').classList.remove('hidden');
+    }
+    setStatus('Loaded: ' + (data.patient_name || 'patient') + '.', 'success');
+  } catch(_) { setStatus('Failed to load note.', 'error'); }
+}
+
+// ── Restore latest audio on load ─────────────────────────────
+async function loadLatestAudio() {
+  try {
+    const data = await fetch('/api/audio/latest').then(r => r.json());
+    if (!data.filename) return;
+    // Only show if no fresh blob from this session
+    if (lastAudioBlob) return;
+    loadedAudioFilename = data.filename;
+    $('audio-player').src = '/api/audio/' + encodeURIComponent(data.filename);
+    $('audio-player').classList.remove('hidden');
+    $('post-record-actions').style.display = 'flex';
+    $('post-record-actions').classList.remove('hidden');
+    setStatus('Last recording restored. Hit Re-transcribe to re-run.', 'info');
+  } catch(_) {}
+}
+
 // ── Init ──────────────────────────────────────────────────────
 (async () => {
   await loadTemplates();
   updatePills();
+  loadHistory();
+  loadLatestAudio();
   setInterval(updatePills, 30000);
 })();

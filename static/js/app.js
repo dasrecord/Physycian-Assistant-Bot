@@ -432,9 +432,36 @@ function cancelAutoGenerate() {
   $('countdown-progress').style.animation = 'none';
 }
 
-function clearForNextPatient() {
+
+async function clearForNextPatient() {
   if (isRecording) return;   // safety: don't clear mid-recording
   cancelAutoGenerate();
+
+  // Gather current patient info
+  const patientInfo = {
+    patient_name: $('patient-name').value.trim(),
+    patient_dob:  $('patient-dob').value.trim(),
+    health_card:  $('health-card').value.trim(),
+    patient_email: $('patient-email').value.trim(),
+    service_date: $('service-date').value.trim(),
+    service_time: $('service-time').value.trim(),
+    visit_type:   $('visit-type').value
+  };
+  // Only save if at least one field is filled
+  const hasData = Object.values(patientInfo).some(v => v && v !== '' && v !== 'standard');
+  if (hasData) {
+    try {
+      await fetch('/api/update-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patientInfo),
+      });
+      setStatus('Patient info saved.', 'success');
+    } catch (e) {
+      setStatus('Failed to save patient info.', 'error');
+    }
+  }
+
   // Patient fields
   $('patient-name').value  = '';
   $('patient-dob').value   = '';

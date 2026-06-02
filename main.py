@@ -868,4 +868,16 @@ if __name__ == "__main__":
         get_soap().warmup()
     threading.Thread(target=_warmup_delayed, daemon=True).start()
 
-    socketio.run(app, host="0.0.0.0", port=PORT, debug=True, use_reloader=True, reloader_type='stat', allow_unsafe_werkzeug=True)
+    # Debug + reloader are opt-in via env var. The reloader spawns a child
+    # process and can lose the venv (causing the wrong Python to be used),
+    # so default to off for unattended/launchd runs.
+    _debug = os.environ.get("PAB_DEBUG", "0") == "1"
+    socketio.run(
+        app,
+        host="0.0.0.0",
+        port=PORT,
+        debug=_debug,
+        use_reloader=_debug,
+        reloader_type='stat',
+        allow_unsafe_werkzeug=True,
+    )

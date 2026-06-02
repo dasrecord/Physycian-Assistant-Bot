@@ -32,6 +32,13 @@ socket.on('connect',    () => updatePills());
 socket.on('disconnect', () => setStatus('Disconnected.', 'error'));
 socket.on('status', d => setStatus(d.msg, d.level || 'info'));
 
+socket.on('transcript_corrections', d => {
+  if (d && d.count) {
+    setStatus(`Vocabulary corrections applied: ${d.count}`, 'info');
+    if (window.console) console.log('[vocab] corrections:', d.changes);
+  }
+});
+
 socket.on('partial_transcript', d => {
   $('transcript').value = d.transcript;
 });

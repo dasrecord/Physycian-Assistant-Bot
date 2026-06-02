@@ -28,5 +28,9 @@ echo "  Starting PhysAI..."
 echo "  Open http://localhost:5001 in your browser"
 echo ""
 
-# Use /usr/bin/python3 explicitly — it has all packages installed
-/usr/bin/python3 main.py
+# Use venv python (project requires Python 3.12; system /usr/bin/python3 is 3.9)
+if [ -x ".venv/bin/python" ]; then
+  .venv/bin/python main.py
+else
+  python3 main.py
+fi

@@ -13,7 +13,9 @@ import shutil
 import subprocess
 import platform
 import tempfile
-from config import WHISPER_MODEL
+from config import WHISPER_MODEL, ENABLE_TRANSCRIPT_CORRECTION
+from vocab.prompts import build_whisper_prompt
+from vocab.corrector import correct_transcript
 
 # ── Ensure ffmpeg is on PATH (static-ffmpeg provides a pre-built binary) ─────
 try:
@@ -27,21 +29,19 @@ _SPEAKER_GAP_S      = 0.6   # pause ≥ this → candidate for speaker change
 _MIN_SPEAKER_HOLD_S = 3.0   # stay on same speaker for at least this long before flipping
 _START_SPEAKER      = "Dr"  # doctor typically opens the consultation
 
-# ── Medical vocabulary priming prompt ─────────────────────────────────────────
-_MEDICAL_PROMPT = (
-    "Family medicine consultation between doctor and patient. "
-    "Chief complaint, history, physical exam, diagnoses, prescriptions. "
-    "Abbreviations: PMHx, FHx, SHx, ROS, HPI, c/o, h/o, r/o, s/p, SOB, N/V/D, "
-    "HTN, DM2, GERD, URI, UTI, CAD, CHF, COPD, CKD, T2DM, OA, RA, "
-    "BP, HR, RR, SpO2, BMI, HbA1c, eGFR, TSH, INR, CBC, BMP, ECG, CXR. "
-    "Medications: metformin, lisinopril, ramipril, atorvastatin, rosuvastatin, "
-    "amlodipine, hydrochlorothiazide, bisoprolol, metoprolol, pantoprazole, "
-    "amoxicillin, azithromycin, ciprofloxacin, trimethoprim, nitrofurantoin, "
-    "salbutamol, fluticasone, tiotropium, montelukast, cetirizine, "
-    "sertraline, escitalopram, venlafaxine, quetiapine, clonazepam, lorazepam, "
-    "levothyroxine, prednisone, naproxen, ibuprofen, acetaminophen, "
-    "warfarin, apixaban, rivaroxaban, clopidogrel, aspirin, nitroglycerin."
-)
+# ── Medical vocabulary priming prompt (built dynamically per visit_type) ─────
+# Default fallback prompt used when no visit_type is passed in.
+_MEDICAL_PROMPT = build_whisper_prompt(visit_type=None)
+
+
+def _correction_callback_holder():
+    """Module-level slot for an optional callback invoked with the corrections
+    log after each transcribe() call. Wired by main.py to emit a socket event."""
+    return _correction_callback_holder.cb if hasattr(_correction_callback_holder, "cb") else None
+
+
+def set_correction_callback(cb):
+    _correction_callback_holder.cb = cb
 
 
 def _ffmpeg() -> str:
@@ -130,17 +130,37 @@ class WhisperTranscriber:
         self._model = WhisperModel(model_size, device="cpu", compute_type="int8")
         print("[Whisper] Ready.")
 
-    def transcribe(self, audio_path: str, diarize: bool = True) -> str:
+    def transcribe(self, audio_path: str, diarize: bool = True, visit_type: str = None) -> str:
         if not audio_path or not os.path.exists(audio_path):
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
+        # Build specialty-aware Whisper prompt for this call.
+        self._prompt = build_whisper_prompt(visit_type=visit_type) or _MEDICAL_PROMPT
         # Phone call mode: stereo = L channel is doctor's mic, R is patient's audio
         if _audio_channels(audio_path) >= 2:
             print("[Whisper] Stereo detected — phone call mode: channel-based diarization.")
-            return self._transcribe_stereo(audio_path)
-        if not diarize:
+            text = self._transcribe_stereo(audio_path)
+        elif not diarize:
             print("[Whisper] Diarization disabled — returning raw transcript.")
-            return self._transcribe_raw(audio_path)
-        return self._transcribe_mlx(audio_path) if self._use_mlx else self._transcribe_faster(audio_path)
+            text = self._transcribe_raw(audio_path)
+        else:
+            text = self._transcribe_mlx(audio_path) if self._use_mlx else self._transcribe_faster(audio_path)
+
+        # Conservative post-transcription correction (medications + abbreviations).
+        if ENABLE_TRANSCRIPT_CORRECTION:
+            try:
+                corrected, changes = correct_transcript(text)
+                if changes:
+                    print(f"[Whisper] Applied {len(changes)} vocab corrections.")
+                    cb = _correction_callback_holder()
+                    if cb:
+                        try:
+                            cb(changes)
+                        except Exception as exc:
+                            print(f"[Whisper] correction callback error: {exc}")
+                text = corrected
+            except Exception as exc:
+                print(f"[Whisper] correction skipped: {exc}")
+        return text
 
     def _get_segments(self, audio_path: str) -> list:
         """Return [(start, end, text), …] for a mono audio file."""
@@ -150,7 +170,7 @@ class WhisperTranscriber:
                 audio_path,
                 path_or_hf_repo=self._mlx_repo,
                 language="en",
-                initial_prompt=_MEDICAL_PROMPT,
+                initial_prompt=getattr(self,"_prompt",None) or _MEDICAL_PROMPT,
                 word_timestamps=False,
             )
             return [
@@ -166,7 +186,7 @@ class WhisperTranscriber:
                 word_timestamps=False,
                 condition_on_previous_text=False,
                 vad_parameters={"min_silence_duration_ms": 500, "speech_pad_ms": 200},
-                initial_prompt=_MEDICAL_PROMPT,
+                initial_prompt=getattr(self,"_prompt",None) or _MEDICAL_PROMPT,
             )
             return [(s.start, s.end, s.text.strip()) for s in segs]
 
@@ -203,7 +223,7 @@ class WhisperTranscriber:
                 audio_path,
                 path_or_hf_repo=self._mlx_repo,
                 language="en",
-                initial_prompt=_MEDICAL_PROMPT,
+                initial_prompt=getattr(self,"_prompt",None) or _MEDICAL_PROMPT,
                 word_timestamps=False,
             )
             segs = result.get("segments", [])
@@ -217,7 +237,7 @@ class WhisperTranscriber:
                 word_timestamps=False,
                 condition_on_previous_text=False,
                 vad_parameters={"min_silence_duration_ms": 500, "speech_pad_ms": 200},
-                initial_prompt=_MEDICAL_PROMPT,
+                initial_prompt=getattr(self,"_prompt",None) or _MEDICAL_PROMPT,
             )
             return " ".join(s.text.strip() for s in segs if s.text.strip())
 
@@ -227,7 +247,7 @@ class WhisperTranscriber:
             audio_path,
             path_or_hf_repo=self._mlx_repo,
             language="en",
-            initial_prompt=_MEDICAL_PROMPT,
+            initial_prompt=getattr(self,"_prompt",None) or _MEDICAL_PROMPT,
             word_timestamps=False,
         )
         segs = result.get("segments", [])
@@ -247,7 +267,7 @@ class WhisperTranscriber:
             word_timestamps=False,
             condition_on_previous_text=False,
             vad_parameters={"min_silence_duration_ms": 500, "speech_pad_ms": 200},
-            initial_prompt=_MEDICAL_PROMPT,
+            initial_prompt=getattr(self,"_prompt",None) or _MEDICAL_PROMPT,
         )
         return _diarize(list(segs),
                         get_start=lambda s: s.start,

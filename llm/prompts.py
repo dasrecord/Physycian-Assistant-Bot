@@ -3,6 +3,16 @@ llm/prompts.py - System prompt and user-prompt builder for family-medicine SOAP 
 Supports template_config for different note types.
 """
 
+try:
+    from config import ENABLE_LLM_GLOSSARY
+except Exception:
+    ENABLE_LLM_GLOSSARY = True
+try:
+    from vocab import lookup_terms_in
+except Exception:
+    def lookup_terms_in(_text):
+        return {"abbreviations": {}, "medications": []}
+
 SOAP_SYSTEM_PROMPT = (
     "You are an expert Canadian family medicine physician assistant with 20 years of clinical "
     "experience. Your only task is to analyse a doctor-patient consultation transcript and "
@@ -107,6 +117,23 @@ def build_soap_prompt(transcript, patient_name="", template_config=None, patient
         f"{pt_line}{intro}"
         f"=== TRANSCRIPT ===\n{transcript}\n=== END TRANSCRIPT ===\n\n"
     )
+
+    # Inject a focused glossary of terms / meds actually present in the transcript.
+    if ENABLE_LLM_GLOSSARY and not is_meeting:
+        found = lookup_terms_in(transcript)
+        glossary_lines = []
+        for canon, expand in sorted(found.get("abbreviations", {}).items()):
+            glossary_lines.append(f"  {canon}: {expand}")
+        for m in found.get("medications", [])[:40]:
+            cls = f" ({m['class']})" if m.get("class") else ""
+            glossary_lines.append(f"  {m['name']}{cls}")
+        if glossary_lines:
+            prompt += (
+                "=== GLOSSARY (reference only; do not copy verbatim, use to disambiguate the transcript) ===\n"
+                + "\n".join(glossary_lines)
+                + "\n=== END GLOSSARY ===\n\n"
+            )
+
     if patient_submitted_info:
         if is_meeting:
             prompt += (

@@ -1,0 +1,28 @@
+{
+  "_meta": {"description": "Lab tests and physiology terms commonly mentioned in primary care visits.", "version": 1},
+  "labs": [
+    "HbA1c", "fasting glucose", "random glucose", "OGTT", "fructosamine",
+    "TSH", "free T4", "free T3", "anti-TPO",
+    "lipid panel", "LDL", "HDL", "triglycerides", "total cholesterol", "non-HDL",
+    "CBC", "hemoglobin", "hematocrit", "MCV", "MCH", "platelets", "WBC", "neutrophils", "lymphocytes",
+    "BMP", "CMP", "sodium", "potassium", "chloride", "bicarbonate", "BUN", "creatinine", "eGFR",
+    "AST", "ALT", "ALP", "GGT", "bilirubin", "albumin", "total protein",
+    "lipase", "amylase",
+    "ferritin", "iron", "TIBC", "transferrin saturation",
+    "vitamin D", "vitamin B12", "folate",
+    "PT", "INR", "PTT", "D-dimer",
+    "CRP", "ESR", "ANA", "RF", "anti-CCP",
+    "PSA", "beta-hCG", "estradiol", "FSH", "LH", "progesterone", "testosterone", "prolactin",
+    "urinalysis", "urine culture", "urine ACR", "24-hour urine"
+  ],
+  "physiology": [
+    "systolic", "diastolic", "afterload", "preload", "stroke volume", "cardiac output", "ejection fraction",
+    "tidal volume", "minute ventilation", "FEV1", "FVC", "FEV1/FVC",
+    "tachycardia", "bradycardia", "tachypnea", "bradypnea", "hypoxemia", "hypoxia", "hypercapnia",
+    "hyponatremia", "hypernatremia", "hypokalemia", "hyperkalemia", "hypocalcemia", "hypercalcemia",
+    "hypoglycemia", "hyperglycemia", "metabolic acidosis", "metabolic alkalosis", "respiratory acidosis", "respiratory alkalosis",
+    "anemia", "leukocytosis", "leukopenia", "thrombocytopenia", "thrombocytosis",
+    "proteinuria", "hematuria", "pyuria", "albuminuria",
+    "edema", "ascites", "effusion", "inflammation"
+  ]
+}

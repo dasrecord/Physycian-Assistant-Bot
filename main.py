@@ -17,7 +17,7 @@ from flask import Flask, render_template, request, jsonify, send_file
 from flask_socketio import SocketIO, emit
 
 from config import PORT, AUDIO_DIR, SESSION_DIR, OLLAMA_MODEL, OLLAMA_URL
-from transcription.stt import WhisperTranscriber
+from transcription.stt import WhisperTranscriber, set_correction_callback
 from llm.soap_generator import SOAPGenerator
 from emr.oscar import OscarEMR
 
@@ -44,6 +44,11 @@ def get_stt():
     if _stt is None:
         socketio.emit("status", {"msg": "Loading Whisper model (first use)...", "level": "info"}, to="/", namespace="/")
         _stt = WhisperTranscriber()
+        # Wire vocab-correction callback so the UI gets a badge per transcribe.
+        set_correction_callback(lambda changes: socketio.emit(
+            "transcript_corrections",
+            {"count": len(changes), "changes": changes[:50]},
+        ))
         socketio.emit("status", {"msg": "Whisper model ready.", "level": "success"}, to="/", namespace="/")
     return _stt
 
@@ -436,7 +441,7 @@ def retranscribe():
         result = {}
         def _work():
             try:
-                result["transcript"] = get_stt().transcribe(fpath, diarize=diarize)
+                result["transcript"] = get_stt().transcribe(fpath, diarize=diarize, visit_type=session.get("visit_type"))
             except Exception as exc:
                 result["error"] = str(exc)
         t = threading.Thread(target=_work, daemon=True)
@@ -549,7 +554,7 @@ def stop_recording():
         def _final():
             socketio.emit("status", {"msg": "Transcribing audio...", "level": "info"})
             try:
-                transcript = get_stt().transcribe(audio_path, diarize=not no_diarize)
+                transcript = get_stt().transcribe(audio_path, diarize=not no_diarize, visit_type=session.get("visit_type"))
                 session["transcript"] = transcript
                 socketio.emit("transcript_ready", {"transcript": transcript})
                 socketio.emit("status", {"msg": "Transcription complete.", "level": "success"})
@@ -573,7 +578,7 @@ def stop_recording():
         def _final_chunks():
             socketio.emit("status", {"msg": "Transcribing audio...", "level": "info"})
             try:
-                transcript = get_stt().transcribe(audio_path)
+                transcript = get_stt().transcribe(audio_path, visit_type=session.get("visit_type"))
                 session["transcript"] = transcript
                 socketio.emit("transcript_ready", {"transcript": transcript})
                 socketio.emit("status", {"msg": "Transcription complete.", "level": "success"})
@@ -864,4 +869,3 @@ if __name__ == "__main__":
     threading.Thread(target=_warmup_delayed, daemon=True).start()
 
     socketio.run(app, host="0.0.0.0", port=PORT, debug=True, use_reloader=True, reloader_type='stat', allow_unsafe_werkzeug=True)
-z

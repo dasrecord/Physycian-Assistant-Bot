@@ -1,0 +1,16 @@
+{
+  "_meta": {"description": "Anatomy terms grouped by system.", "version": 1},
+  "systems": {
+    "cardiovascular": ["aorta", "ventricle", "atrium", "myocardium", "pericardium", "endocardium", "mitral valve", "aortic valve", "tricuspid valve", "pulmonary valve", "coronary artery", "carotid artery", "jugular vein", "femoral artery", "popliteal", "radial pulse", "brachial"],
+    "respiratory": ["trachea", "bronchus", "bronchioles", "alveoli", "pleura", "diaphragm", "larynx", "pharynx", "nasopharynx", "oropharynx", "sinuses", "tonsils", "epiglottis", "lung", "lobe"],
+    "gastrointestinal": ["esophagus", "stomach", "duodenum", "jejunum", "ileum", "cecum", "appendix", "colon", "ascending colon", "descending colon", "sigmoid", "rectum", "anus", "liver", "gallbladder", "pancreas", "spleen", "peritoneum", "mesentery"],
+    "genitourinary": ["kidney", "ureter", "bladder", "urethra", "prostate", "seminal vesicle", "testis", "epididymis", "scrotum", "penis", "vulva", "labia", "vagina", "cervix", "uterus", "fallopian tube", "ovary", "endometrium"],
+    "musculoskeletal": ["clavicle", "scapula", "humerus", "radius", "ulna", "carpals", "metacarpals", "phalanges", "femur", "patella", "tibia", "fibula", "tarsals", "metatarsals", "cervical spine", "thoracic spine", "lumbar spine", "sacrum", "coccyx", "rotator cuff", "ACL", "PCL", "MCL", "LCL", "meniscus"],
+    "nervous": ["cerebrum", "cerebellum", "brainstem", "medulla", "pons", "midbrain", "thalamus", "hypothalamus", "hippocampus", "amygdala", "spinal cord", "dura mater", "arachnoid", "pia mater", "cranial nerve", "peripheral nerve", "sciatic nerve", "median nerve", "ulnar nerve", "radial nerve"],
+    "endocrine": ["pituitary", "pineal", "thyroid", "parathyroid", "adrenal gland", "pancreatic islets", "ovary", "testis"],
+    "integumentary": ["epidermis", "dermis", "subcutaneous tissue", "sebaceous gland", "sweat gland", "hair follicle", "nail"],
+    "lymphatic": ["lymph node", "spleen", "thymus", "tonsils", "adenoids", "bone marrow"],
+    "ophthalmology": ["cornea", "iris", "pupil", "lens", "retina", "macula", "optic nerve", "sclera", "conjunctiva", "vitreous"],
+    "ENT": ["tympanic membrane", "ossicles", "cochlea", "vestibule", "eustachian tube", "turbinate", "uvula"]
+  }
+}

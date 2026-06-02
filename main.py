@@ -233,6 +233,65 @@ def get_latest_audio():
         return jsonify({"filename": None, "error": str(exc)})
 
 
+def _audio_note_index():
+    """Map of audio_filename -> note metadata (for orphan detection / linkage)."""
+    index = {}
+    try:
+        for fname in os.listdir(NOTES_DIR):
+            if not fname.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(NOTES_DIR, fname), encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+            af = data.get("audio_filename") or ""
+            if af:
+                index[af] = {
+                    "note_filename": fname,
+                    "patient_name":  data.get("patient_name", ""),
+                    "session_id":    data.get("session_id", ""),
+                    "timestamp":     data.get("timestamp", ""),
+                }
+    except Exception as exc:
+        print(f"[audio] note index failed: {exc}")
+    return index
+
+
+@app.route("/api/audio", methods=["GET"])
+def list_audio():
+    """List all session audio files with size, mtime, and any linked note metadata."""
+    entries = []
+    try:
+        note_idx = _audio_note_index()
+        for fname in os.listdir(AUDIO_DIR):
+            if not fname.endswith(".webm"):
+                continue
+            fpath = os.path.join(AUDIO_DIR, fname)
+            if not os.path.isfile(fpath):
+                continue
+            st = os.stat(fpath)
+            link = note_idx.get(fname)
+            entries.append({
+                "filename":      fname,
+                "size_bytes":    st.st_size,
+                "mtime":         datetime.fromtimestamp(st.st_mtime).isoformat(),
+                "linked":        bool(link),
+                "patient_name":  (link or {}).get("patient_name", ""),
+                "session_id":    (link or {}).get("session_id", ""),
+                "note_filename": (link or {}).get("note_filename", ""),
+            })
+        entries.sort(key=lambda e: e["mtime"], reverse=True)
+    except Exception as exc:
+        print(f"[audio] list failed: {exc}")
+    total_bytes = sum(e["size_bytes"] for e in entries)
+    return jsonify({
+        "entries":      entries,
+        "count":        len(entries),
+        "total_bytes":  total_bytes,
+    })
+
+
 @app.route("/api/audio/<path:filename>", methods=["GET"])
 def get_audio(filename):
     """Serve a saved audio file by name."""
@@ -242,6 +301,118 @@ def get_audio(filename):
     if not os.path.isfile(fpath):
         return jsonify({"error": "Not found"}), 404
     return send_file(fpath, mimetype="audio/webm")
+
+
+@app.route("/api/audio/<path:filename>", methods=["DELETE"])
+def delete_audio(filename):
+    """Delete a single audio file. Optionally clears the linked note's audio_filename field."""
+    if ".." in filename or "/" in filename or "\\" in filename:
+        return jsonify({"error": "Invalid filename"}), 400
+    fpath = os.path.join(AUDIO_DIR, filename)
+    if not os.path.isfile(fpath):
+        return jsonify({"error": "Not found"}), 404
+    try:
+        os.remove(fpath)
+    except OSError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    # Unlink from any note that referenced this audio file
+    cleared_notes = 0
+    try:
+        for nf in os.listdir(NOTES_DIR):
+            if not nf.endswith(".json"):
+                continue
+            npath = os.path.join(NOTES_DIR, nf)
+            try:
+                with open(npath, encoding="utf-8") as f:
+                    data = json.load(f)
+                if data.get("audio_filename") == filename:
+                    data["audio_filename"] = ""
+                    with open(npath, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+                    cleared_notes += 1
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return jsonify({"status": "deleted", "notes_unlinked": cleared_notes})
+
+
+@app.route("/api/audio/purge", methods=["POST"])
+def purge_audio():
+    """Bulk-delete audio files.
+    Body: {"mode": "all" | "orphans" | "older_than", "days": int (only for older_than)}
+    """
+    data = request.get_json(silent=True) or {}
+    mode = data.get("mode", "orphans")
+    if mode not in ("all", "orphans", "older_than"):
+        return jsonify({"error": "Invalid mode"}), 400
+
+    note_idx = _audio_note_index() if mode in ("orphans", "all") else {}
+    now = datetime.now().timestamp()
+    days = 0
+    if mode == "older_than":
+        try:
+            days = int(data.get("days", 30))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid days"}), 400
+        if days < 0:
+            return jsonify({"error": "days must be >= 0"}), 400
+
+    deleted, errors, freed = [], [], 0
+    try:
+        for fname in list(os.listdir(AUDIO_DIR)):
+            if not fname.endswith(".webm"):
+                continue
+            fpath = os.path.join(AUDIO_DIR, fname)
+            if not os.path.isfile(fpath):
+                continue
+            if mode == "orphans" and fname in note_idx:
+                continue
+            if mode == "older_than":
+                age_days = (now - os.path.getmtime(fpath)) / 86400.0
+                if age_days < days:
+                    continue
+            size = os.path.getsize(fpath)
+            try:
+                os.remove(fpath)
+                deleted.append(fname)
+                freed += size
+            except OSError as exc:
+                errors.append({"filename": fname, "error": str(exc)})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    # Unlink notes when purging all
+    notes_unlinked = 0
+    if mode == "all" or deleted:
+        deleted_set = set(deleted)
+        try:
+            for nf in os.listdir(NOTES_DIR):
+                if not nf.endswith(".json"):
+                    continue
+                npath = os.path.join(NOTES_DIR, nf)
+                try:
+                    with open(npath, encoding="utf-8") as f:
+                        ndata = json.load(f)
+                    if ndata.get("audio_filename") in deleted_set:
+                        ndata["audio_filename"] = ""
+                        with open(npath, "w", encoding="utf-8") as f:
+                            json.dump(ndata, f, ensure_ascii=False, indent=2)
+                        notes_unlinked += 1
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    return jsonify({
+        "status":         "ok",
+        "mode":           mode,
+        "deleted_count":  len(deleted),
+        "freed_bytes":    freed,
+        "notes_unlinked": notes_unlinked,
+        "errors":         errors,
+    })
 
 
 @app.route("/api/retranscribe", methods=["POST"])
@@ -501,7 +672,7 @@ def generate_note():
                 socketio.emit("note_streaming", {"token": "".join(buf)}, to=target_sid)
 
             raw = "".join(raw_tokens)
-            note = get_soap()._parse(raw)
+            note = get_soap()._parse(raw, template_config=template_config)
             session["soap_note"] = note
             _save_note(session.copy(), note)
             socketio.emit("note_ready", note, to=target_sid)

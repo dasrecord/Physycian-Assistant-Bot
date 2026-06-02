@@ -41,7 +41,7 @@ class SOAPGenerator:
         prompt = build_soap_prompt(transcript, patient_name, template_config, patient_submitted_info=patient_submitted_info)
         system = get_system_prompt(template_config)
         raw = self._call_ollama(prompt, system)
-        return self._parse(raw)
+        return self._parse(raw, template_config=template_config)
 
     def generate_streaming(self, transcript, patient_name="", template_config=None, patient_submitted_info=None):
         """Streaming generation -- yields token strings as they arrive."""
@@ -141,7 +141,16 @@ class SOAPGenerator:
         ]
         return "\n".join(lines_out)
 
-    def _parse(self, raw):
+    def _parse(self, raw, template_config=None):
+        # Freeform (non-medical) templates: return the raw text in a single block;
+        # do NOT try to split into S/O/A/P or extract ICD-9 codes.
+        if template_config and (template_config.get("freeform") or template_config.get("category") == "meeting"):
+            return {
+                "subjective": "", "objective": "", "assessment": "", "plan": "",
+                "icd9_codes": [], "extra_sections": {}, "raw": raw,
+                "note_format": "freeform",
+                "full_text": raw.strip(),
+            }
         note = {
             "subjective": "", "objective": "", "assessment": "",
             "plan": "", "icd9_codes": [], "extra_sections": {}, "raw": raw,

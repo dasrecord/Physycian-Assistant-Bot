@@ -36,6 +36,42 @@
     "output_format": "S:\n[Chief complaint, onset, duration. Birth history (if relevant), developmental history, immunisation status, diet, school performance. PMHx, current medications, allergies, FHx, SHx. Items not discussed -> Not reported.]\n\nO:\nVitals: [temp, HR, RR, SpO2, weight (kg), height (cm), head circumference (if <2y), percentiles]\n[Physical examination findings]\n\nA:\n[Primary diagnosis] - ICD9: [code]\n[Secondary diagnoses] - ICD9: [code]\nDDx: [Diagnosis 1], [Diagnosis 2], [Diagnosis 3]\n\nP:\n- Investigations: [if ordered]\n- Medications: [weight-based dosing if prescribed]\n- Immunisations: [if discussed]\n- Referrals: [paediatrics, subspecialties]\n- Caregiver education: [topics covered]\n- Follow-up: [interval and return precautions]\n\nICD9_CODES: [comma-separated list of every ICD9 code used above]\n"
   },
   {
+    "id": "meeting_minutes",
+    "name": "Business Meeting Minutes",
+    "description": "Generic meeting minutes for business / team meetings",
+    "icon": "users",
+    "is_builtin": true,
+    "category": "meeting",
+    "freeform": true,
+    "system_prompt_override": "You are an expert executive assistant. Your task is to analyse a transcript of a meeting between two or more people and produce a clear, well-structured set of meeting minutes.\n\nSTRICT RULES:\n1. NEVER fabricate information. If something was not discussed, omit that sub-section — do not write placeholders.\n2. The transcript may contain speaker labels like 'Dr:' / 'Pt:' or 'Speaker 1:' / 'Speaker 2:'. Treat them as distinct attendees. If real names are mentioned, prefer the real names. If no name is known, refer to participants as 'Speaker 1', 'Speaker 2', etc.\n3. Action items MUST be concrete: who, what, by when (only include 'by when' if a date/deadline was actually stated).\n4. Decisions must be reported verbatim in meaning — do not editorialise.\n5. Use neutral, professional, third-person language.\n6. Output ONLY the minutes in the exact format requested. No preamble, no commentary, no apologies.\n",
+    "system_prompt_extra": "",
+    "output_format": "MEETING MINUTES\n\nTitle: [Meeting title or subject, if stated; otherwise omit]\nDate: [if stated in transcript]\nAttendees: [List of participants identified in transcript]\n\nAGENDA / TOPICS DISCUSSED:\n- [Topic 1 — brief description]\n- [Topic 2 — brief description]\n\nKEY DISCUSSION POINTS:\n- [Bullet point summarising a substantive point that was raised, with attribution if helpful: 'Alice noted that ...']\n- [...]\n\nDECISIONS:\n- [Decision 1]\n- [Decision 2]\n(Omit this section entirely if no decisions were made.)\n\nACTION ITEMS:\n- [Owner] — [Action] — [Due date if stated]\n- [...]\n(Omit this section entirely if none.)\n\nOPEN QUESTIONS / FOLLOW-UPS:\n- [Question or unresolved item]\n(Omit if none.)\n\nNEXT STEPS:\n[Short paragraph or bullets describing what happens next, only if discussed.]\n"
+  },
+  {
+    "id": "meeting_summary",
+    "name": "Meeting Quick Summary",
+    "description": "Short executive summary of a conversation or meeting",
+    "icon": "file-text",
+    "is_builtin": true,
+    "category": "meeting",
+    "freeform": true,
+    "system_prompt_override": "You are an expert note-taker. Produce a concise summary of the conversation transcript provided. Do not invent facts. Do not include speaker labels verbatim — synthesise the content. Output ONLY the summary in the requested format.\n",
+    "system_prompt_extra": "",
+    "output_format": "SUMMARY\n[2-4 sentence executive summary of what the meeting was about and the outcome.]\n\nKEY POINTS:\n- [Point 1]\n- [Point 2]\n- [Point 3]\n\nACTION ITEMS:\n- [Owner] — [Action] — [Due date if stated]\n(Omit if none.)\n"
+  },
+  {
+    "id": "interview_notes",
+    "name": "Interview Notes",
+    "description": "Notes for 1-on-1 interviews (candidate, research, journalism)",
+    "icon": "mic",
+    "is_builtin": true,
+    "category": "meeting",
+    "freeform": true,
+    "system_prompt_override": "You are an expert note-taker for interviews. Analyse the transcript of a 1-on-1 interview and produce structured notes. Distinguish between the interviewer and the interviewee. Do not fabricate. Output ONLY the notes in the requested format.\n",
+    "system_prompt_extra": "",
+    "output_format": "INTERVIEW NOTES\n\nInterviewee: [Name if known, otherwise 'Interviewee']\nInterviewer: [Name if known, otherwise 'Interviewer']\nDate: [if stated]\n\nTOPICS COVERED:\n- [Topic 1]\n- [Topic 2]\n\nKEY ANSWERS / QUOTES:\n- [Topic] — [Summary of response, with a direct quote in \"...\" if particularly notable]\n\nFOLLOW-UPS:\n- [Things to revisit or clarify]\n(Omit if none.)\n"
+  },
+  {
     "id": "urgent_care",
     "name": "Urgent / Acute Care",
     "description": "Focused urgent care or walk-in SOAP note",

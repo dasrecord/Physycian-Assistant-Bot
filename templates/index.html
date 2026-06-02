@@ -11,6 +11,7 @@
 
 <header class="topbar">
   <span class="topbar-brand">&#9877; DAS DONE</span>
+  <button class="btn btn-next-pt btn-next-pt-top" onclick="clearForNextPatient()" title="Clear all fields for the next patient encounter">&#43; Next Patient</button>
   <span id="status-message" class="status-msg">Ready.</span>
   <div class="topbar-right">
     <span id="pill-whisper" class="pill pill-off">&#127908; Whisper</span>
@@ -105,7 +106,6 @@ Health Card: 9743702042"></textarea>
 
     <!-- Transcript -->
     <div class="card flex-grow">
-      <button class="btn btn-next-pt" onclick="clearForNextPatient()" title="Clear all fields for the next patient encounter">&#43; Next Patient</button>
       <label class="field-label">Transcript</label>
       <textarea id="transcript" class="transcript-area" placeholder="Transcript appears here after recording, or paste one..."></textarea>
       <div id="auto-generate-bar" class="auto-bar hidden">
@@ -116,15 +116,22 @@ Health Card: 9743702042"></textarea>
       <button id="btn-generate" class="btn btn-primary" disabled>&#128196; Generate SOAP Note</button>
     </div>
 
-    <!-- History -->
-    <div class="card history-card">
+    <!-- Encounters (consolidated notes + audio) -->
+    <div class="card history-card encounters-card">
       <div class="history-hdr">
-        <div class="history-hdr-title" onclick="toggleHistory()">
-          <span class="field-label">&#128203; Patients</span>
+        <div class="history-hdr-title" onclick="toggleEncounters()">
+          <span class="field-label">&#128203; Encounters</span>
           <span id="history-count" class="history-badge hidden">0</span>
+          <span id="audio-size" class="audio-size-label"></span>
           <span id="history-chevron" class="history-chevron">&#9660;</span>
         </div>
+      </div>
+      <div class="history-subhdr">
         <input type="date" id="history-date-pick" class="history-date-pick" title="Filter by date (clear for all dates)" />
+        <div class="audio-hdr-actions">
+          <button class="btn-link btn-link-sm" onclick="purgeAudio('orphans')" title="Delete audio files not linked to any saved note">Purge orphans</button>
+          <button class="btn-link btn-link-sm danger" onclick="purgeAudio('all')" title="Delete ALL session audio files">Purge all</button>
+        </div>
       </div>
       <div id="history-list" class="history-list hidden"></div>
     </div>

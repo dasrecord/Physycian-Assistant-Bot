@@ -73,32 +73,58 @@ _BASE_FORMAT = (
 
 
 def get_system_prompt(template_config=None):
-    base = SOAP_SYSTEM_PROMPT
+    # Full override (e.g. non-medical meeting templates) — bypass the medical base prompt entirely.
+    if template_config and template_config.get("system_prompt_override"):
+        base = template_config["system_prompt_override"].strip() + "\n"
+    else:
+        base = SOAP_SYSTEM_PROMPT
     if template_config and template_config.get("system_prompt_extra"):
         base = base.rstrip() + "\n" + template_config["system_prompt_extra"].strip() + "\n"
     return base
 
 
 def build_soap_prompt(transcript, patient_name="", template_config=None, patient_submitted_info=None):
-    pt_line = f"Patient: {patient_name}\n" if patient_name else ""
+    is_meeting = bool(template_config and template_config.get("category") == "meeting")
+
+    if is_meeting:
+        title_line = f"Meeting / Subject: {patient_name}\n" if patient_name else ""
+        intro = (
+            "Analyse the following meeting / conversation transcript and generate "
+            "structured notes. Strictly follow ALL rules from the system prompt.\n\n"
+        )
+        pt_line = title_line
+    else:
+        pt_line = f"Patient: {patient_name}\n" if patient_name else ""
+        intro = (
+            "Analyse the following doctor-patient consultation transcript and generate "
+            "a complete clinical note. Strictly follow ALL rules from the system prompt.\n\n"
+        )
     output_format = (
         template_config.get("output_format") or _BASE_FORMAT
         if template_config else _BASE_FORMAT
     )
     prompt = (
-        f"{pt_line}Analyse the following doctor-patient consultation transcript and generate "
-        f"a complete clinical note. Strictly follow ALL rules from the system prompt.\n\n"
+        f"{pt_line}{intro}"
         f"=== TRANSCRIPT ===\n{transcript}\n=== END TRANSCRIPT ===\n\n"
     )
     if patient_submitted_info:
-        prompt += (
-            "\n==============================\n"
-            "PATIENT-SUPPLIED INFORMATION (provided by patient, e.g., intake form, email):\n"
-            "(Format: bullet points or labeled fields. Example: 'Allergies: No known drug allergies')\n"
-            f"{patient_submitted_info.strip()}\n"
-            "==============================\n"
-            " IMPORTANT: You MUST extract and merge all clinically relevant details from BOTH the transcript and the patient-supplied info. For each SOAP section (especially Allergies, Medications, PMHx, SHx), always check both sources. If the patient-supplied info contains allergy or medication details, ensure they are reflected in the note, unless contradicted by the transcript. If both sources mention the same field, prefer the transcript."
-        )
+        if is_meeting:
+            prompt += (
+                "\n==============================\n"
+                "PRE-MEETING CONTEXT / NOTES (provided ahead of the meeting):\n"
+                f"{patient_submitted_info.strip()}\n"
+                "==============================\n"
+                " IMPORTANT: Use this context to enrich the minutes (e.g., agenda items, attendee roles, background) but do NOT fabricate decisions or action items that did not occur in the transcript.\n"
+            )
+        else:
+            prompt += (
+                "\n==============================\n"
+                "PATIENT-SUPPLIED INFORMATION (provided by patient, e.g., intake form, email):\n"
+                "(Format: bullet points or labeled fields. Example: 'Allergies: No known drug allergies')\n"
+                f"{patient_submitted_info.strip()}\n"
+                "==============================\n"
+                " IMPORTANT: You MUST extract and merge all clinically relevant details from BOTH the transcript and the patient-supplied info. For each SOAP section (especially Allergies, Medications, PMHx, SHx), always check both sources. If the patient-supplied info contains allergy or medication details, ensure they are reflected in the note, unless contradicted by the transcript. If both sources mention the same field, prefer the transcript."
+            )
     prompt += (
         f"Generate the note now. Exact format required, no extra commentary:\n\n"
         f"{output_format}\n"

@@ -52,7 +52,8 @@ socket.on('note_streaming', d => {
 socket.on('note_ready', note => {
   isGenerating = false;
   $('btn-generate').disabled = false;
-  $('btn-generate').textContent = '\u{1F4C4} Generate SOAP Note';
+  const isMeeting = document.body.classList.contains('meeting-mode');
+  $('btn-generate').textContent = isMeeting ? '📝 Generate Meeting Notes' : '\u{1F4C4} Generate SOAP Note';
   currentNote = note;
   renderNote(note);
   $('btn-copy').disabled    = false;
@@ -278,6 +279,7 @@ async function stopRecording() {
     ? '/api/stop-recording?no_diarize=1'
     : '/api/stop-recording';
   await fetch(stopUrl, { method: 'POST', body: blob, headers: { 'Content-Type': 'audio/webm' } });
+  if (typeof loadAudioList === 'function') loadAudioList();
 }
 
 $('btn-retranscribe').addEventListener('click', async () => {
@@ -554,6 +556,13 @@ function _fixSubheadings(text) {
 }
 
 function renderNote(note) {
+  // Freeform (meeting / non-medical) note: dump full_text and hide ICD-9 chips.
+  if (note && note.note_format === 'freeform') {
+    $('note-full').value = (note.full_text || note.raw || '').trim();
+    $('icd9-chips').innerHTML = '';
+    $('icd9-row').classList.add('hidden');
+    return;
+  }
   let text = '';
   // Helper to bullet each line of content
   if (note.subjective) text += 'S:\n' + note.subjective + '\n\n';
@@ -614,6 +623,7 @@ async function submitBilling() {
   });
 }
 function checkBillingUpgrade() {
+  if (document.body.classList.contains('meeting-mode')) return;
   const words = $('note-full').value.split(/\s+/).filter(Boolean).length;
   if (timerSeconds > 1200 || words > 400) $('billing-upgrade-bar').classList.remove('hidden');
 }
@@ -699,20 +709,60 @@ function drawWave() {
 }
 
 // ── Templates ─────────────────────────────────────────────────
+let _templateCache = [];
 async function loadTemplates() {
   const list = await fetch('/api/templates').then(r => r.json());
+  _templateCache = list;
   const sel = $('template-select');
   sel.innerHTML = '';
   list.forEach(t => {
     const opt = document.createElement('option');
     opt.value = t.id; opt.textContent = t.name;
+    if (t.category) opt.dataset.category = t.category;
     sel.appendChild(opt);
   });
   const saved = localStorage.getItem('defaultTemplate');
   if (saved && [...sel.options].some(o => o.value === saved)) sel.value = saved;
   renderTemplateList(list);
+  applyTemplateMode();
 }
-$('template-select').addEventListener('change', () => localStorage.setItem('defaultTemplate', $('template-select').value));
+function _currentTemplate() {
+  const id = $('template-select').value;
+  return _templateCache.find(t => t.id === id) || null;
+}
+function applyTemplateMode() {
+  const t = _currentTemplate();
+  const isMeeting = !!(t && t.category === 'meeting');
+  document.body.classList.toggle('meeting-mode', isMeeting);
+  // Relabel & re-placeholder the primary subject field
+  const nameInput = $('patient-name');
+  if (isMeeting) {
+    nameInput.placeholder = 'Meeting title / subject';
+    nameInput.title = 'Meeting title or subject';
+  } else {
+    nameInput.placeholder = 'Patient name';
+    nameInput.title = '';
+  }
+  // Hide medical-only inputs in meeting mode
+  ['patient-dob', 'health-card', 'patient-email', 'visit-type'].forEach(id => {
+    const el = $(id); if (el) el.classList.toggle('hidden', isMeeting);
+  });
+  // Disable EMR / billing actions in meeting mode (no clinical context)
+  const oscar = $('btn-oscar'); if (oscar) oscar.classList.toggle('hidden', isMeeting);
+  const bill  = $('btn-billing'); if (bill)  bill.classList.toggle('hidden', isMeeting);
+  // Update note-area placeholder
+  const note = $('note-full');
+  if (note) note.placeholder = isMeeting
+    ? 'Meeting notes will stream here as the AI generates them…\n\nPaste a transcript on the left and click Generate, or record the meeting.'
+    : 'SOAP note will stream here as the AI generates it…\n\nPaste a transcript on the left and click Generate, or record a consultation.';
+  // Update generate button label
+  const gen = $('btn-generate');
+  if (gen && !isGenerating) gen.textContent = isMeeting ? '📝 Generate Meeting Notes' : '📄 Generate SOAP Note';
+}
+$('template-select').addEventListener('change', () => {
+  localStorage.setItem('defaultTemplate', $('template-select').value);
+  applyTemplateMode();
+});
 function renderTemplateList(list) {
   const tl = $('template-list'); tl.innerHTML = '';
   list.forEach(t => {
@@ -798,32 +848,82 @@ function _escHtml(s) {
   });
 })();
 
-function toggleHistory() {
+function toggleEncounters() {
   _historyOpen = !_historyOpen;
   $('history-list').classList.toggle('hidden', !_historyOpen);
   $('history-chevron').textContent = _historyOpen ? '▴' : '▾';
-  if (_historyOpen) loadHistory();
+  if (_historyOpen) loadEncounters();
 }
+// Back-compat alias (any callers still using the old name)
+const toggleHistory = toggleEncounters;
+window.toggleEncounters = toggleEncounters;
 
-async function loadHistory() {
+async function loadEncounters() {
   try {
     const dateParam = _historyDate || 'all';
-    const entries = await fetch('/api/history?date=' + encodeURIComponent(dateParam)).then(r => r.json());
-    const badge = $('history-count');
-    if (entries.length) { badge.textContent = entries.length; badge.classList.remove('hidden'); }
-    else { badge.classList.add('hidden'); }
+    const [notes, audioRes] = await Promise.all([
+      fetch('/api/history?date=' + encodeURIComponent(dateParam)).then(r => r.json()).catch(() => []),
+      fetch('/api/audio').then(r => r.json()).catch(() => ({ entries: [], total_bytes: 0 })),
+    ]);
+    const audioEntries = (audioRes && audioRes.entries) || [];
+    // Index audio by filename for joining with notes
+    const audioByName = {};
+    audioEntries.forEach(a => { if (a.filename) audioByName[a.filename] = a; });
+
+    // Build merged encounter list
+    const showingAll = !_historyDate;
+    const encounters = [];
+    const usedAudio = new Set();
+
+    (notes || []).forEach(n => {
+      const audio = n.audio_filename ? audioByName[n.audio_filename] : null;
+      if (audio) usedAudio.add(n.audio_filename);
+      encounters.push({
+        kind: 'note',
+        ts: n.timestamp || (audio && audio.mtime) || '',
+        note: n,
+        audio,
+      });
+    });
+
+    // Orphan audio (no matching note). "Matching only" date filter:
+    // when a specific date is selected, only include orphans whose mtime
+    // falls on that date; when "all dates", include every orphan.
+    audioEntries.forEach(a => {
+      if (usedAudio.has(a.filename)) return;
+      if (!showingAll) {
+        const aDate = a.mtime ? new Date(a.mtime).toISOString().slice(0, 10) : '';
+        if (aDate !== _historyDate) return;
+      }
+      encounters.push({
+        kind: 'orphan',
+        ts: a.mtime || '',
+        note: null,
+        audio: a,
+      });
+    });
+
+    // Sort newest first
+    encounters.sort((a, b) => (b.ts || '').localeCompare(a.ts || ''));
+
+    // Header badges
+    const countBadge = $('history-count');
+    if (encounters.length) { countBadge.textContent = encounters.length; countBadge.classList.remove('hidden'); }
+    else { countBadge.classList.add('hidden'); }
+    const sizeLabel = $('audio-size');
+    if (sizeLabel) sizeLabel.textContent = audioEntries.length ? _fmtBytes(audioRes.total_bytes) : '';
+
     if (!_historyOpen) return;
     const list = $('history-list');
     list.innerHTML = '';
-    if (!entries.length) {
-      list.innerHTML = '<div class="history-empty">No patients found.</div>';
+    if (!encounters.length) {
+      list.innerHTML = '<div class="history-empty">No encounters found.</div>';
       return;
     }
-    const showingAll = !_historyDate;
+
     let lastDate = null;
-    entries.forEach(e => {
-      const entryDate = e.timestamp ? e.timestamp.slice(0, 10) : '';
-      // Date separator when showing all dates
+    encounters.forEach(enc => {
+      const entryDate = enc.ts ? enc.ts.slice(0, 10) : '';
       if (showingAll && entryDate && entryDate !== lastDate) {
         const sep = document.createElement('div');
         sep.className = 'history-date-sep';
@@ -838,27 +938,109 @@ async function loadHistory() {
         list.appendChild(sep);
         lastDate = entryDate;
       }
-      const row = document.createElement('div');
-      row.className = 'history-row';
-      const time    = e.timestamp ? e.timestamp.substring(11, 16) : '';
-      const name    = e.patient_name || 'Unknown';
-      const summary = e.summary || (e.icd9_codes || []).slice(0, 2).join(', ') || '';
-      row.innerHTML =
-        `<div class="hrow-top">` +
-          `<span class="hrow-name">${_escHtml(name)}</span>` +
-          `<span class="hrow-time">${_escHtml(time)}</span>` +
-          `<span class="hrow-actions">` +
-            `<button class="hrow-btn hrow-edit" title="Rename patient">&#9998;</button>` +
-            `<button class="hrow-btn hrow-del"  title="Delete note">&#128465;</button>` +
-          `</span>` +
-        `</div>` +
-        (summary ? `<div class="hrow-summary">${_escHtml(summary)}</div>` : '');
-      row.querySelector('.hrow-edit').addEventListener('click', ev => { ev.stopPropagation(); _historyRename(row, e); });
-      row.querySelector('.hrow-del' ).addEventListener('click', ev => { ev.stopPropagation(); _historyDelete(e.filename, row); });
-      row.addEventListener('click', () => loadHistoryNote(e.filename));
-      list.appendChild(row);
+      list.appendChild(_renderEncounterRow(enc));
     });
   } catch(_) {}
+}
+
+// Back-compat aliases
+const loadHistory = loadEncounters;
+const loadAudioList = loadEncounters;
+window.loadEncounters = loadEncounters;
+
+function _renderEncounterRow(enc) {
+  const row = document.createElement('div');
+  const isOrphan = enc.kind === 'orphan';
+  row.className = 'history-row enc-row' + (isOrphan ? ' orphan' : '');
+
+  const n = enc.note;
+  const a = enc.audio;
+  const time = enc.ts ? enc.ts.substring(11, 16) : '';
+
+  let name, summary;
+  if (n) {
+    name = n.patient_name || 'Unknown';
+    summary = n.summary || (n.icd9_codes || []).slice(0, 2).join(', ') || '';
+  } else {
+    name = '(orphan audio)';
+    summary = a ? a.filename : '';
+  }
+
+  const sizeStr = a ? _fmtBytes(a.size_bytes) : '';
+
+  // Action buttons (conditional)
+  const audioActions = a ? (
+    `<button class="hrow-btn enc-play"  title="Play audio inline">&#9654;</button>` +
+    `<button class="hrow-btn enc-load"  title="Load audio into main player">&#8682;</button>` +
+    `<button class="hrow-btn enc-dl"    title="Download audio">&#11015;</button>` +
+    `<button class="hrow-btn enc-adel"  title="Delete audio file">&#127908;&#10005;</button>`
+  ) : '';
+  const noteActions = n ? (
+    `<button class="hrow-btn hrow-edit" title="Rename patient">&#9998;</button>` +
+    `<button class="hrow-btn hrow-del"  title="Delete note">&#128465;</button>`
+  ) : '';
+
+  row.innerHTML =
+    `<div class="hrow-top">` +
+      `<span class="hrow-name" title="${_escHtml(a ? a.filename : (n && n.filename) || '')}">${_escHtml(name)}</span>` +
+      `<span class="hrow-time">${_escHtml(time)}</span>` +
+      (sizeStr ? `<span class="arow-size">${_escHtml(sizeStr)}</span>` : '') +
+      `<span class="hrow-actions">${audioActions}${noteActions}</span>` +
+    `</div>` +
+    (summary ? `<div class="hrow-summary">${_escHtml(summary)}</div>` : '');
+
+  // Note actions
+  if (n) {
+    row.querySelector('.hrow-edit').addEventListener('click', ev => { ev.stopPropagation(); _historyRename(row, n); });
+    row.querySelector('.hrow-del' ).addEventListener('click', ev => { ev.stopPropagation(); _historyDelete(n.filename, row); });
+    row.addEventListener('click', () => loadHistoryNote(n.filename));
+  }
+
+  // Audio actions
+  if (a) {
+    row.querySelector('.enc-play').addEventListener('click', ev => {
+      ev.stopPropagation();
+      const existing = row.querySelector('.arow-audio');
+      if (existing) { existing.remove(); return; }
+      const audio = document.createElement('audio');
+      audio.className = 'arow-audio';
+      audio.controls = true;
+      audio.src = '/api/audio/' + encodeURIComponent(a.filename);
+      row.appendChild(audio);
+      audio.play().catch(() => {});
+    });
+    row.querySelector('.enc-load').addEventListener('click', ev => {
+      ev.stopPropagation();
+      loadedAudioFilename = a.filename;
+      lastAudioBlob = null;
+      $('audio-player').src = '/api/audio/' + encodeURIComponent(a.filename);
+      $('audio-player').classList.remove('hidden');
+      $('post-record-actions').style.display = 'flex';
+      $('post-record-actions').classList.remove('hidden');
+      setStatus('Loaded ' + a.filename + ' into player.', 'info');
+    });
+    row.querySelector('.enc-dl').addEventListener('click', ev => {
+      ev.stopPropagation();
+      const link = document.createElement('a');
+      link.href = '/api/audio/' + encodeURIComponent(a.filename);
+      link.download = a.filename;
+      document.body.appendChild(link); link.click(); link.remove();
+    });
+    row.querySelector('.enc-adel').addEventListener('click', async ev => {
+      ev.stopPropagation();
+      const msg = n
+        ? `Delete this audio file?\n\nNote for "${n.patient_name || 'patient'}" will be kept but audio playback will be removed.`
+        : 'Delete this orphan audio file? This cannot be undone.';
+      if (!confirm(msg)) return;
+      try {
+        const r = await fetch('/api/audio/' + encodeURIComponent(a.filename), { method: 'DELETE' });
+        if (r.ok) { setStatus('Audio file deleted.', 'info'); loadEncounters(); }
+        else { setStatus('Delete failed.', 'error'); }
+      } catch(_) { setStatus('Delete failed.', 'error'); }
+    });
+  }
+
+  return row;
 }
 
 function _historyRename(row, entry) {
@@ -903,7 +1085,7 @@ async function _historyDelete(filename, row) {
       row.remove();
       const list = $('history-list');
       const remaining = list.querySelectorAll('.history-row').length;
-      if (!remaining) list.innerHTML = '<div class="history-empty">No patients found.</div>';
+      if (!remaining) list.innerHTML = '<div class="history-empty">No encounters found.</div>';
       const badge = $('history-count');
       if (remaining > 0) badge.textContent = remaining;
       else badge.classList.add('hidden');
@@ -968,4 +1150,45 @@ async function loadLatestAudio() {
 // Add restore button logic
 window.restoreLastRecording = async function() {
   await loadLatestAudio();
+}
+
+// ── Audio files panel (list / play / delete / purge) ─────────
+let _audioOpen = false;
+
+function _fmtBytes(n) {
+  if (!n && n !== 0) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+  if (n < 1024*1024*1024) return (n/1024/1024).toFixed(1) + ' MB';
+  return (n/1024/1024/1024).toFixed(2) + ' GB';
+}
+
+window.purgeAudio = async function(mode) {
+  let confirmMsg = '';
+  let body = { mode };
+  if (mode === 'all') {
+    confirmMsg = 'PURGE ALL session audio files? This cannot be undone.\n\n(Notes are kept, but audio playback is removed.)';
+  } else if (mode === 'orphans') {
+    confirmMsg = 'Delete all audio files that are NOT linked to a saved note?';
+  } else if (mode === 'older_than') {
+    const days = prompt('Delete audio older than how many days?', '30');
+    if (days === null) return;
+    body.days = parseInt(days, 10);
+    if (isNaN(body.days) || body.days < 0) { alert('Invalid days value.'); return; }
+    confirmMsg = `Delete all audio older than ${body.days} days?`;
+  }
+  if (!confirm(confirmMsg)) return;
+  try {
+    const res = await fetch('/api/audio/purge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(r => r.json());
+    if (res.status === 'ok') {
+      setStatus(`Purged ${res.deleted_count} file(s), freed ${_fmtBytes(res.freed_bytes)}.`, 'success');
+      loadAudioList();
+    } else {
+      setStatus('Purge failed: ' + (res.error || 'unknown'), 'error');
+    }
+  } catch(e) { setStatus('Purge failed.', 'error'); }
 }

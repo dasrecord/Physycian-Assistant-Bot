@@ -93,6 +93,67 @@ def get_system_prompt(template_config=None):
     return base
 
 
+def _normalise_checklist(text: str) -> str:
+    """Convert tab-separated Yes/No symptom checklists into readable lines.
+
+    Input format (copied from a web form with two columns: No | Yes):
+      symptom\\t✓\\t        → ✓ in No column  → "NO:  symptom"
+      symptom\\t\\t✓        → ✓ in Yes column → "YES: symptom"
+
+    The rule the user observed: a Yes check has an *extra* tab (or space) before
+    the ✓ compared with a No check.  In practice the raw paste looks like:
+      "black or dark coloured urine\\t✓\\t"   → No
+      "stinging / burning with urination\\t\\t✓" → Yes
+
+    Lines that don't match the checklist pattern are left untouched.
+    If the block contains a "No / Yes" header pair it is replaced with a
+    plain label so the LLM understands the section.
+    """
+    import re
+
+    # Collapse standalone "No" / "Yes" header lines that appear on consecutive lines
+    # (some forms render the two column headers on separate lines)
+    text = re.sub(r'(?m)^No\r?\n\s*Yes\s*$', 'Symptom checklist (Yes = present, No = absent):', text)
+
+    lines = text.splitlines()
+    out = []
+    in_checklist = False
+
+    for line in lines:
+        # Detect the column-header row produced by these forms
+        stripped = line.strip()
+        if re.fullmatch(r'No\s+Yes', stripped) or re.fullmatch(r'No\s*/\s*Yes', stripped):
+            out.append("Symptom checklist (Yes = present, No = absent):")
+            in_checklist = True
+            continue
+
+        # Only attempt checklist parsing once we've seen the header,
+        # or if the line itself strongly looks like a checklist row.
+        if '✓' not in line:
+            out.append(line)
+            continue
+
+        # Split on tab; ✓ position relative to symptom text tells us the column.
+        # Pattern A: "symptom\t✓\t..."  → No column (one tab before ✓)
+        # Pattern B: "symptom\t\t✓..."  → Yes column (two or more tabs before ✓)
+        # We also handle spaces-as-tabs for robustness.
+        m_yes = re.match(r'^(.+?)\t{2,}✓', line)
+        m_no  = re.match(r'^(.+?)\t✓',     line)
+
+        if m_yes:
+            symptom = m_yes.group(1).strip()
+            out.append(f"YES: {symptom}")
+            in_checklist = True
+        elif m_no:
+            symptom = m_no.group(1).strip()
+            out.append(f"NO:  {symptom}")
+            in_checklist = True
+        else:
+            out.append(line)
+
+    return "\n".join(out)
+
+
 def build_soap_prompt(transcript, patient_name="", template_config=None, patient_submitted_info=None):
     is_meeting = bool(template_config and template_config.get("category") == "meeting")
 
@@ -135,6 +196,7 @@ def build_soap_prompt(transcript, patient_name="", template_config=None, patient
             )
 
     if patient_submitted_info:
+        patient_submitted_info = _normalise_checklist(patient_submitted_info)
         if is_meeting:
             prompt += (
                 "\n==============================\n"

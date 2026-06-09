@@ -31,6 +31,9 @@ undetected-chromedriver>=3.5.0
 python-dotenv>=1.0.0
 openpyxl>=3.1.0
 
+# ICD-9-CM local lookup (data bundled in package, used to build vocab/data/icd9.json)
+icd9cms>=1.0.0
+
 # Utilities
 numpy>=1.26.0
 

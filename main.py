@@ -388,9 +388,23 @@ def purge_audio():
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
-    # Unlink notes when purging all
+    # For "all" mode: delete notes too. For other modes: unlink audio_filename only.
+    notes_deleted = 0
     notes_unlinked = 0
-    if mode == "all" or deleted:
+    if mode == "all":
+        try:
+            for nf in os.listdir(NOTES_DIR):
+                if not nf.endswith(".json"):
+                    continue
+                npath = os.path.join(NOTES_DIR, nf)
+                try:
+                    os.remove(npath)
+                    notes_deleted += 1
+                except OSError:
+                    continue
+        except Exception:
+            pass
+    elif deleted:
         deleted_set = set(deleted)
         try:
             for nf in os.listdir(NOTES_DIR):
@@ -415,9 +429,58 @@ def purge_audio():
         "mode":           mode,
         "deleted_count":  len(deleted),
         "freed_bytes":    freed,
+        "notes_deleted":  notes_deleted,
         "notes_unlinked": notes_unlinked,
         "errors":         errors,
     })
+
+
+# ── ICD-9 lookup ─────────────────────────────────────────────────────────────
+
+_ICD9_INDEX: list[dict] | None = None
+_ICD9_LOWER: list[tuple[str, str, dict]] | None = None  # (code_lower, desc_lower, record)
+
+def _load_icd9():
+    global _ICD9_INDEX, _ICD9_LOWER
+    if _ICD9_INDEX is not None:
+        return
+    data_path = Path(__file__).parent / "vocab" / "data" / "icd9.json"
+    with open(data_path, encoding="utf-8") as f:
+        _ICD9_INDEX = json.load(f)
+    _ICD9_LOWER = [(r["code"].lower(), r["desc"].lower(), r) for r in _ICD9_INDEX]
+
+
+@app.route("/api/icd9/search", methods=["GET"])
+def icd9_search():
+    """Search ICD-9-CM codes by code prefix or description keywords.
+    Query params:
+      q     — search string (required)
+      limit — max results (default 20, max 100)
+    Returns list of {code, desc, short}.
+    """
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify([])
+    try:
+        limit = min(int(request.args.get("limit", 20)), 100)
+    except (TypeError, ValueError):
+        limit = 20
+
+    _load_icd9()
+    q_lower = q.lower().replace(".", "")
+
+    # Phase 1: code prefix matches (ordered by code length asc so specific codes first)
+    code_hits = [r for (cl, _, r) in _ICD9_LOWER if cl.replace(".", "").startswith(q_lower)]
+    code_hits.sort(key=lambda r: len(r["code"]))
+
+    # Phase 2: description word matches (all words in q must appear in desc)
+    words = q_lower.split()
+    desc_hits = [r for (_, dl, r) in _ICD9_LOWER if all(w in dl for w in words)]
+
+    # Merge: code matches first, then desc-only matches, dedup by code
+    seen = {r["code"] for r in code_hits}
+    merged = code_hits + [r for r in desc_hits if r["code"] not in seen]
+    return jsonify(merged[:limit])
 
 
 @app.route("/api/retranscribe", methods=["POST"])

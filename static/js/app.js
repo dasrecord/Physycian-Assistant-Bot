@@ -485,7 +485,7 @@ async function clearForNextPatient() {
   $('note-full').value  = '';
   // ICD9 chips
   $('icd9-chips').innerHTML = '';
-  $('icd9-row').classList.add('hidden');
+  $('icd9-results').innerHTML = '';
   // Audio player
   $('audio-player').src = '';
   $('audio-player').classList.add('hidden');
@@ -567,7 +567,6 @@ function renderNote(note) {
   if (note && note.note_format === 'freeform') {
     $('note-full').value = (note.full_text || note.raw || '').trim();
     $('icd9-chips').innerHTML = '';
-    $('icd9-row').classList.add('hidden');
     return;
   }
   let text = '';
@@ -592,9 +591,6 @@ function renderNote(note) {
       span.textContent = code;
       chips.appendChild(span);
     });
-    $('icd9-row').classList.remove('hidden');
-  } else {
-    $('icd9-row').classList.add('hidden');
   }
 }
 
@@ -1199,3 +1195,79 @@ window.purgeAudio = async function(mode) {
     }
   } catch(e) { setStatus('Purge failed.', 'error'); }
 }
+
+// ── ICD-9 lookup ──────────────────────────────────────────────
+let _icd9SearchTimer = null;
+
+function _addIcd9Chip(code, desc) {
+  const chips = $('icd9-chips');
+  // Avoid duplicates
+  for (const el of chips.querySelectorAll('.icd9-chip')) {
+    if (el.dataset.code === code) return;
+  }
+  const span = document.createElement('span');
+  span.className = 'icd9-chip';
+  span.dataset.code = code;
+  span.textContent = code;
+  span.title = (desc ? desc + '\n' : '') + 'Click to remove';
+  span.addEventListener('click', () => span.remove());
+  chips.appendChild(span);
+}
+
+$('icd9-search-input').addEventListener('input', () => {
+  clearTimeout(_icd9SearchTimer);
+  const q = $('icd9-search-input').value.trim();
+  const results = $('icd9-results');
+  if (!q) { results.innerHTML = ''; return; }
+  _icd9SearchTimer = setTimeout(async () => {
+    try {
+      const data = await fetch(`/api/icd9/search?q=${encodeURIComponent(q)}&limit=20`).then(r => r.json());
+      results.innerHTML = '';
+      if (!data.length) {
+        const li = document.createElement('li');
+        li.className = 'icd9-no-results';
+        li.textContent = 'No results.';
+        results.appendChild(li);
+        return;
+      }
+      data.forEach(item => {
+        const li = document.createElement('li');
+        li.className = 'icd9-result-item';
+        li.tabIndex = 0;
+        li.innerHTML = `<span class="icd9-result-code">${_escHtml(item.code)}</span> <span class="icd9-result-desc">${_escHtml(item.desc)}</span>`;
+        li.addEventListener('click', () => {
+          _addIcd9Chip(item.code, item.desc);
+          $('icd9-search-input').value = '';
+          results.innerHTML = '';
+          $('icd9-search-input').focus();
+        });
+        results.appendChild(li);
+      });
+    } catch(_) {}
+  }, 200);
+});
+
+$('icd9-search-input').addEventListener('keydown', e => {
+  const items = $('icd9-results').querySelectorAll('.icd9-result-item');
+  if (e.key === 'ArrowDown' && items.length) { e.preventDefault(); items[0].focus(); return; }
+  if (e.key === 'Enter' && items.length) { items[0].click(); return; }
+  if (e.key === 'Escape') { $('icd9-search-input').value = ''; $('icd9-results').innerHTML = ''; }
+});
+
+$('icd9-results').addEventListener('keydown', e => {
+  const items = Array.from($('icd9-results').querySelectorAll('.icd9-result-item'));
+  const idx = items.indexOf(document.activeElement);
+  if (e.key === 'ArrowDown' && idx < items.length - 1) { e.preventDefault(); items[idx + 1].focus(); }
+  if (e.key === 'ArrowUp') { e.preventDefault(); idx > 0 ? items[idx - 1].focus() : $('icd9-search-input').focus(); }
+  if (e.key === 'Enter' && idx >= 0) { e.preventDefault(); items[idx].click(); }
+  if (e.key === 'Escape') { $('icd9-search-input').value = ''; $('icd9-results').innerHTML = ''; $('icd9-search-input').focus(); }
+});
+
+// '/' shortcut focuses ICD-9 search when not in an input
+document.addEventListener('keydown', e => {
+  if (e.key !== '/') return;
+  const tag = document.activeElement ? document.activeElement.tagName : '';
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
+  e.preventDefault();
+  $('icd9-search-input').focus();
+});

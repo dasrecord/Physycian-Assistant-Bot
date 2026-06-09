@@ -141,6 +141,7 @@ Health Card: 9743702042"></textarea>
       <span><kbd>Space</kbd> Rec</span>
       <span><kbd>G</kbd> Generate</span>
       <span><kbd>C</kbd> Copy</span>
+      <span><kbd>/</kbd> ICD-9</span>
       <span><kbd>Esc</kbd> Cancel</span>
     </div>
 
@@ -158,7 +159,7 @@ Health Card: 9743702042"></textarea>
         </div>
       </div>
       <textarea id="note-full" class="note-area" placeholder="SOAP note will stream here as the AI generates it&#8230;&#10;&#10;Paste a transcript on the left and click Generate, or record a consultation."></textarea>
-      <div id="icd9-row" class="icd9-row hidden">
+      <div id="icd9-row" class="icd9-row">
         <span class="icd9-label">ICD-9</span>
         <div id="icd9-chips" class="icd9-chips"></div>
       </div>
@@ -166,6 +167,16 @@ Health Card: 9743702042"></textarea>
         &#9888;&#65039; Long or complex visit &mdash;
         <button class="btn-link" onclick="submitBilling()">Submit billing claim</button>
       </div>
+    </div>
+
+    <!-- ICD-9 lookup card -->
+    <div class="card icd9-lookup-card">
+      <div class="icd9-lookup-hdr">
+        <span class="field-label">&#128270; ICD-9 Lookup</span>
+        <kbd class="kbd-hint-inline">/</kbd>
+      </div>
+      <input id="icd9-search-input" type="text" class="icd9-search-input" placeholder="Code or description… e.g. 486, hypertension" autocomplete="off" />
+      <ul id="icd9-results" class="icd9-results icd9-results-inline"></ul>
     </div>
   </div>
 

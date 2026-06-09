@@ -511,7 +511,92 @@ select option { background: var(--surface2); }
   padding: 2px 8px;
   font-size: .78rem;
   font-weight: 600;
+  cursor: pointer;
 }
+.icd9-chip:hover { background: rgba(74,125,245,.28); }
+
+/* ICD-9 add button */
+.icd9-add-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 4px;
+  padding: 1px 7px;
+  font-size: .85rem;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.icd9-add-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ICD-9 search box */
+.icd9-search-box {
+  position: relative;
+  margin-top: 4px;
+}
+.icd9-search-box.hidden { display: none; }
+.icd9-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg2, #1e1e2e);
+  color: var(--text);
+  font-size: .85rem;
+}
+.icd9-search-input:focus { outline: none; border-color: var(--accent); }
+.icd9-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  background: var(--bg2, #1e1e2e);
+  position: absolute;
+  width: 100%;
+  box-sizing: border-box;
+  z-index: 200;
+}
+.icd9-results:empty { display: none; }
+.icd9-result-item {
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: .82rem;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.icd9-result-item:hover, .icd9-result-item:focus {
+  background: rgba(74,125,245,.15);
+  outline: none;
+}
+.icd9-result-item { tabindex: 0; }
+.icd9-result-code { color: var(--accent); font-weight: 600; white-space: nowrap; }
+.icd9-result-desc { color: var(--text2, #ccc); }
+.icd9-no-results { padding: 6px 10px; font-size: .82rem; color: var(--muted); font-style: italic; }
+
+/* ICD-9 lookup card */
+.icd9-lookup-card { display: flex; flex-direction: column; gap: 6px; }
+.icd9-lookup-hdr { display: flex; align-items: center; justify-content: space-between; }
+.kbd-hint-inline {
+  font-size: .7rem;
+  background: var(--bg3, #2a2a3e);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: var(--muted);
+}
+.icd9-results-inline {
+  position: static !important;
+  max-height: 260px;
+  border-top: 1px solid var(--border) !important;
+  border-radius: 6px !important;
+  width: 100% !important;
+}
+.icd9-results-inline:empty { display: none; }
 
 /* ── Billing upgrade bar ───────────────────────────────── */
 .upgrade-bar {

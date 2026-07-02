@@ -39,6 +39,16 @@ session: dict = {}
 TEMPLATES_FILE = Path(__file__).parent / "note_templates.json"
 
 
+def _ssl_context_from_env():
+    cert_file = (os.environ.get("PAB_SSL_CERT_FILE") or "").strip()
+    key_file = (os.environ.get("PAB_SSL_KEY_FILE") or "").strip()
+    if not cert_file or not key_file:
+        return None
+    if not os.path.isfile(cert_file) or not os.path.isfile(key_file):
+        return None
+    return (cert_file, key_file)
+
+
 def get_stt():
     global _stt
     if _stt is None:
@@ -918,10 +928,16 @@ def on_connect():
 if __name__ == "__main__":
     import socket as _sock
     local_ip = _sock.gethostbyname(_sock.gethostname())
+    ssl_context = _ssl_context_from_env()
+    public_host = (os.environ.get("PAB_PUBLIC_HOSTNAME") or "").strip()
     print("=" * 60)
     print("  Physician Assistant Bot")
-    print(f"  Local :  http://localhost:{PORT}")
-    print(f"  Phone  :  http://{local_ip}:{PORT}")
+    if ssl_context and public_host:
+        print(f"  Secure:  https://{public_host}:{PORT}")
+        print("  Note  :  use the tailnet hostname so the certificate matches")
+    else:
+        print(f"  Local :  http://localhost:{PORT}")
+        print(f"  Phone  :  http://{local_ip}:{PORT}")
     print("=" * 60)
 
     # Warmup Ollama in background so first generation is fast
@@ -943,4 +959,5 @@ if __name__ == "__main__":
         use_reloader=_debug,
         reloader_type='stat',
         allow_unsafe_werkzeug=True,
+        ssl_context=ssl_context,
     )

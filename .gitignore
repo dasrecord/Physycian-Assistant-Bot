@@ -51,3 +51,6 @@ logs/
 dist/
 build/
 *.egg-info/
+.tls/festivalls-mac-studio.tail7ccaf7.ts.net.crt
+.gitignore
+.tls/festivalls-mac-studio.tail7ccaf7.ts.net.key

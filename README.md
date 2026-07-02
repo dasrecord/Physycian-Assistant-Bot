@@ -28,6 +28,26 @@ bash start.sh       # start the server
 # Open http://localhost:5001
 ```
 
+### macOS / Tailscale HTTPS
+
+If you want browser mic access from another computer, run this one time on the Mac:
+
+```bash
+bash setup-remote.sh
+```
+
+After that, start the app normally with:
+
+```bash
+bash start.sh
+```
+
+Open the HTTPS URL printed by the app, which will look like:
+
+```text
+https://festivalls-mac-studio.tail7ccaf7.ts.net:5001
+```
+
 ### Windows
 
 ```bat

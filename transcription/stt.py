@@ -34,6 +34,38 @@ _START_SPEAKER      = "Dr"  # doctor typically opens the consultation
 _MEDICAL_PROMPT = build_whisper_prompt(visit_type=None)
 
 
+def _is_mlx_audio_load_error(exc: Exception) -> bool:
+    """Detect mlx/openai-whisper decode failures that include ffmpeg stderr."""
+    msg = str(exc).lower()
+    return "failed to load audio" in msg or "ffmpeg" in msg
+
+
+def _summarize_ffmpeg_error(exc: Exception) -> str:
+    """Keep the actionable tail of ffmpeg stderr, not the long banner."""
+    msg = str(exc)
+    lines = [ln.strip() for ln in msg.splitlines() if ln.strip()]
+    if not lines:
+        return msg
+
+    banner_prefixes = (
+        "ffmpeg version",
+        "copyright",
+        "built with",
+        "configuration:",
+        "libav",
+    )
+    filtered = []
+    for ln in lines:
+        low = ln.lower()
+        if low.startswith(banner_prefixes):
+            continue
+        filtered.append(ln)
+
+    if not filtered:
+        return lines[-1]
+    return " | ".join(filtered[-3:])
+
+
 def _correction_callback_holder():
     """Module-level slot for an optional callback invoked with the corrections
     log after each transcribe() call. Wired by main.py to emit a socket event."""
@@ -113,6 +145,7 @@ class WhisperTranscriber:
     """
 
     def __init__(self, model_size: str = WHISPER_MODEL):
+        self._model_size = model_size
         self._use_mlx = False
         if platform.machine() == "arm64" and platform.system() == "Darwin":
             try:
@@ -130,20 +163,47 @@ class WhisperTranscriber:
         self._model = WhisperModel(model_size, device="cpu", compute_type="int8")
         print("[Whisper] Ready.")
 
+    def _ensure_faster_model(self):
+        """Lazy-load CPU fallback model when MLX decode path fails."""
+        if hasattr(self, "_model") and self._model is not None:
+            return
+        from faster_whisper import WhisperModel
+        print(f"[Whisper] Loading '{self._model_size}' on CPU fallback (int8)…")
+        self._model = WhisperModel(self._model_size, device="cpu", compute_type="int8")
+
+    def _transcribe_with_current_backend(self, audio_path: str, diarize: bool) -> str:
+        # Phone call mode: stereo = L channel is doctor's mic, R is patient's audio
+        if _audio_channels(audio_path) >= 2:
+            print("[Whisper] Stereo detected — phone call mode: channel-based diarization.")
+            return self._transcribe_stereo(audio_path)
+        if not diarize:
+            print("[Whisper] Diarization disabled — returning raw transcript.")
+            return self._transcribe_raw(audio_path)
+        return self._transcribe_mlx(audio_path) if self._use_mlx else self._transcribe_faster(audio_path)
+
     def transcribe(self, audio_path: str, diarize: bool = True, visit_type: str = None) -> str:
         if not audio_path or not os.path.exists(audio_path):
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
         # Build specialty-aware Whisper prompt for this call.
         self._prompt = build_whisper_prompt(visit_type=visit_type) or _MEDICAL_PROMPT
-        # Phone call mode: stereo = L channel is doctor's mic, R is patient's audio
-        if _audio_channels(audio_path) >= 2:
-            print("[Whisper] Stereo detected — phone call mode: channel-based diarization.")
-            text = self._transcribe_stereo(audio_path)
-        elif not diarize:
-            print("[Whisper] Diarization disabled — returning raw transcript.")
-            text = self._transcribe_raw(audio_path)
-        else:
-            text = self._transcribe_mlx(audio_path) if self._use_mlx else self._transcribe_faster(audio_path)
+
+        try:
+            text = self._transcribe_with_current_backend(audio_path, diarize)
+        except Exception as exc:
+            if self._use_mlx and _is_mlx_audio_load_error(exc):
+                print(f"[Whisper] MLX audio decode failed, retrying with faster-whisper: {_summarize_ffmpeg_error(exc)}")
+                self._use_mlx = False
+                self._ensure_faster_model()
+                try:
+                    text = self._transcribe_with_current_backend(audio_path, diarize)
+                except Exception as retry_exc:
+                    if _is_mlx_audio_load_error(retry_exc):
+                        raise RuntimeError(f"Failed to decode audio: {_summarize_ffmpeg_error(retry_exc)}") from retry_exc
+                    raise
+            else:
+                if _is_mlx_audio_load_error(exc):
+                    raise RuntimeError(f"Failed to decode audio: {_summarize_ffmpeg_error(exc)}") from exc
+                raise
 
         # Conservative post-transcription correction (medications + abbreviations).
         if ENABLE_TRANSCRIPT_CORRECTION:

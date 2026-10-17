@@ -27,6 +27,18 @@ let cancelPending       = false;   // recording is being cancelled (discard data
 
 const $ = id => document.getElementById(id);
 
+function ensureServiceDateTime() {
+  const now = new Date();
+  const localDate = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+  ].join('-');
+  const localTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  if (!$('service-date').value) $('service-date').value = localDate;
+  if (!$('service-time').value) $('service-time').value = localTime;
+}
+
 // ── Socket events ─────────────────────────────────────────────
 socket.on('connect',    () => updatePills());
 socket.on('disconnect', () => setStatus('Disconnected.', 'error'));
@@ -66,6 +78,7 @@ socket.on('note_ready', note => {
   $('btn-copy').disabled    = false;
   $('btn-oscar').disabled   = false;
   $('btn-billing').disabled = false;
+  $('btn-export-xlsx').disabled = document.body.classList.contains('meeting-mode');
   cancelAutoGenerate();
   checkBillingUpgrade();
   setStatus('Note ready. Review, edit, then post.', 'success');
@@ -85,15 +98,26 @@ function setStatus(msg, level) {
 // ── Timer ─────────────────────────────────────────────────────
 function startTimer() {
   timerSeconds = 0;
+  $('prolonged-counselling').checked = false;
+  updateProlongedCounsellingControl();
   timerInterval = setInterval(() => {
     timerSeconds++;
     const m = String(Math.floor(timerSeconds / 60)).padStart(2, '0');
     const s = String(timerSeconds % 60).padStart(2, '0');
     $('el-timer').textContent = m + ':' + s;
     if (timerSeconds >= 1200) $('el-timer').classList.add('amber');
+    updateProlongedCounsellingControl();
   }, 1000);
 }
 function stopTimer() { clearInterval(timerInterval); }
+function updateProlongedCounsellingControl() {
+  const checkbox = $('prolonged-counselling');
+  if ($('visit-type').value === 'counselling' && timerSeconds >= 20 * 60) {
+    checkbox.checked = true;
+  }
+}
+$('visit-type').addEventListener('change', updateProlongedCounsellingControl);
+updateProlongedCounsellingControl();
 
 // ── Phone call mode ──────────────────────────────────────────
 function toggleCallMode() {
@@ -151,6 +175,7 @@ function togglePause() {
       const s = String(timerSeconds % 60).padStart(2, '0');
       $('el-timer').textContent = m + ':' + s;
       if (timerSeconds >= 1200) $('el-timer').classList.add('amber');
+      updateProlongedCounsellingControl();
     }, 1000);
     liveInterval = setInterval(sendLiveChunk, 15000);
     isPaused = false;
@@ -182,6 +207,9 @@ async function cancelRecording() {
   $('btn-cancel').classList.add('hidden');
   $('el-timer').textContent = '00:00';
   $('el-timer').classList.remove('amber');
+  timerSeconds = 0;
+  $('prolonged-counselling').checked = false;
+  updateProlongedCounsellingControl();
   setStatus('Recording cancelled.', 'info');
 }
 
@@ -189,6 +217,7 @@ async function startRecording() {
   try { audioStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
   catch (e) { setStatus('Microphone access denied.', 'error'); return; }
 
+  ensureServiceDateTime();
   let recordingStream = audioStream;   // default: mic only (mono)
   phoneCallSucceeded = null;
 
@@ -238,6 +267,8 @@ async function startRecording() {
       patient_dob:  $('patient-dob').value,
       health_card:  $('health-card').value,
       visit_type:   $('visit-type').value,
+      service_date: $('service-date').value,
+      service_time: $('service-time').value,
     }),
   });
 
@@ -495,12 +526,16 @@ async function clearForNextPatient() {
   $('btn-copy').disabled     = true;
   $('btn-oscar').disabled    = true;
   if ($('btn-billing')) $('btn-billing').disabled = true;
+  if ($('btn-export-xlsx')) $('btn-export-xlsx').disabled = true;
   // State
   currentNote         = null;
   lastAudioBlob       = null;
   loadedAudioFilename = null;
   $('el-timer').textContent = '00:00';
   $('el-timer').classList.remove('amber');
+  timerSeconds = 0;
+  $('prolonged-counselling').checked = false;
+  updateProlongedCounsellingControl();
   setStatus('Ready for next patient.', 'info');
   $('patient-name').focus();
 }
@@ -513,8 +548,10 @@ async function generateNote() {
   const transcript = $('transcript').value.trim();
   const patientSubmittedInfo = $('patient-submitted-info').value.trim();
   if (!transcript) { setStatus('No transcript to generate from.', 'warn'); return; }
+  ensureServiceDateTime();
   isGenerating = true;
   $('btn-generate').disabled = true;
+  $('btn-export-xlsx').disabled = true;
   $('btn-generate').textContent = '\u23F3 Generating...';
   $('note-full').value = '';
   setStatus('Sending to local AI\u2026', 'info');
@@ -530,6 +567,8 @@ async function generateNote() {
       patient_dob:  $('patient-dob').value.trim(),
       health_card:  $('health-card').value.trim(),
       visit_type:   $('visit-type').value,
+      service_date: $('service-date').value,
+      service_time: $('service-time').value,
     }),
   });
   if (!res.ok) {
@@ -612,8 +651,13 @@ $('btn-oscar').addEventListener('click', async () => {
 
 // ── Billing ───────────────────────────────────────────────────
 $('btn-billing').addEventListener('click', submitBilling);
+if ($('btn-export-xlsx')) $('btn-export-xlsx').addEventListener('click', exportBillingRow);
 async function submitBilling() {
   if (!currentNote) return;
+  if ($('prolonged-counselling').checked && $('visit-type').value !== 'counselling') {
+    setStatus('Select Counselling visit type to use prolonged counselling billing.', 'warn');
+    return;
+  }
   await fetch('/api/submit-billing', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -622,13 +666,390 @@ async function submitBilling() {
       patient_dob:  $('patient-dob').value,
       health_card:  $('health-card').value,
       visit_type:   $('visit-type').value,
+      service_date: $('service-date').value,
+      service_time: $('service-time').value,
+      duration_seconds: timerSeconds,
+      prolonged_counselling: $('prolonged-counselling').checked,
     }),
   });
+}
+async function exportBillingRow() {
+  if (!currentNote || document.body.classList.contains('meeting-mode')) return;
+  if ($('prolonged-counselling').checked && $('visit-type').value !== 'counselling') {
+    setStatus('Select Counselling visit type to use prolonged counselling billing.', 'warn');
+    return;
+  }
+  const button = $('btn-export-xlsx');
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/export-billing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        soap_note: currentNote,
+        patient_name: $('patient-name').value.trim(),
+        patient_dob: $('patient-dob').value,
+        health_card: $('health-card').value.trim(),
+        visit_type: $('visit-type').value,
+        service_date: $('service-date').value,
+        service_time: $('service-time').value,
+        duration_seconds: timerSeconds,
+        prolonged_counselling: $('prolonged-counselling').checked,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not append the billing row.');
+    const timeMessage = result.time_adjusted
+      ? ` Scheduled ${result.start_time}–${result.end_time} to avoid overlap.`
+      : ` ${result.start_time}–${result.end_time}.`;
+    setStatus(
+      `Billing row added (row ${result.row}, item ${result.billing_item}).${timeMessage}`,
+      'success'
+    );
+  } catch (error) {
+    setStatus(`Billing export failed: ${error.message}`, 'error');
+  } finally {
+    button.disabled = !currentNote || document.body.classList.contains('meeting-mode');
+  }
 }
 function checkBillingUpgrade() {
   if (document.body.classList.contains('meeting-mode')) return;
   const words = $('note-full').value.split(/\s+/).filter(Boolean).length;
   if (timerSeconds > 1200 || words > 400) $('billing-upgrade-bar').classList.remove('hidden');
+}
+
+// ── Billing workbook editor ──────────────────────────────────
+let xlsxEditorModifiedNs = null;
+let xlsxEditorOriginal = [];
+let xlsxEditorRows = [];
+let xlsxEditorFileId = '';
+let xlsxEditorSheetName = '';
+let xlsxEditorDeletedRows = new Set();
+
+function hasPendingWorkbookChanges() {
+  return xlsxEditorDeletedRows.size > 0 || xlsxEditorRows.some(row =>
+    row.sourceRow === null || row.values.some((value, column) =>
+      String(value ?? '') !== String(xlsxEditorOriginal[row.sourceRow - 1][column] ?? '')
+    )
+  );
+}
+
+function collectWorkbookChanges() {
+  const changes = [];
+  const newRows = [];
+  for (const row of xlsxEditorRows) {
+    if (row.sourceRow === null) {
+      newRows.push(row.values);
+      continue;
+    }
+    row.values.forEach((value, column) => {
+      if (String(value ?? '') !== String(xlsxEditorOriginal[row.sourceRow - 1][column] ?? '')) {
+        changes.push({ row: row.sourceRow, column: column + 1, value: String(value ?? '') });
+      }
+    });
+  }
+  return {
+    changes,
+    new_rows: newRows,
+    delete_rows: Array.from(xlsxEditorDeletedRows),
+  };
+}
+
+$('btn-edit-xlsx').addEventListener('click', openWorkbookEditor);
+$('xlsx-editor-close').addEventListener('click', closeWorkbookEditor);
+$('xlsx-editor-modal').addEventListener('click', event => {
+  if (event.target === $('xlsx-editor-modal')) closeWorkbookEditor();
+});
+$('xlsx-file-select').addEventListener('change', () => {
+  if (hasPendingWorkbookChanges() && !confirm('Discard unsaved workbook edits and open another file?')) {
+    $('xlsx-file-select').value = xlsxEditorFileId;
+    return;
+  }
+  xlsxEditorDeletedRows.clear();
+  $('xlsx-sheet-select').replaceChildren();
+  loadWorkbookWorksheet();
+});
+$('xlsx-sheet-select').addEventListener('change', () => {
+  if (hasPendingWorkbookChanges() && !confirm('Discard unsaved workbook edits and open another worksheet?')) {
+    $('xlsx-sheet-select').value = xlsxEditorSheetName;
+    return;
+  }
+  xlsxEditorDeletedRows.clear();
+  loadWorkbookWorksheet();
+});
+$('xlsx-reload').addEventListener('click', () => {
+  if (hasPendingWorkbookChanges() && !confirm('Discard unsaved workbook edits and reload?')) return;
+  xlsxEditorDeletedRows.clear();
+  loadWorkbookWorksheet();
+});
+$('xlsx-save').addEventListener('click', saveWorkbookEdits);
+$('xlsx-add-row').addEventListener('click', addWorkbookRow);
+
+async function openWorkbookEditor() {
+  if (hasPendingWorkbookChanges() && !confirm('Discard unsaved workbook edits and reopen the editor?')) return;
+  $('xlsx-editor-modal').classList.remove('hidden');
+  $('xlsx-editor-status').textContent = 'Loading workbooks…';
+  $('xlsx-grid').replaceChildren();
+  $('xlsx-save').disabled = true;
+  try {
+    const response = await fetch('/api/xlsx/workbooks');
+    const workbooks = await response.json();
+    if (!response.ok) throw new Error(workbooks.error || 'Could not list workbooks.');
+    const picker = $('xlsx-file-select');
+    picker.replaceChildren();
+    for (const workbook of workbooks) {
+      const option = document.createElement('option');
+      option.value = workbook.id;
+      option.textContent = `${workbook.id} (${workbook.sheets.map(sheet => sheet.name).join(', ')})`;
+      picker.appendChild(option);
+    }
+    if (!workbooks.length) {
+      $('xlsx-editor-status').textContent = 'No .xlsx workbooks found in the current export or archive folders.';
+      $('xlsx-sheet-select').replaceChildren();
+      return;
+    }
+    await loadWorkbookWorksheet();
+  } catch (error) {
+    $('xlsx-editor-status').textContent = `Could not load workbooks: ${error.message}`;
+  }
+}
+
+function closeWorkbookEditor() {
+  if (hasPendingWorkbookChanges() && !confirm('Discard unsaved workbook edits?')) return;
+  $('xlsx-editor-modal').classList.add('hidden');
+  xlsxEditorDeletedRows.clear();
+  xlsxEditorRows = xlsxEditorOriginal.map((values, index) => ({
+    values: [...values],
+    sourceRow: index + 1,
+  }));
+}
+
+async function loadWorkbookWorksheet() {
+  const file = $('xlsx-file-select').value;
+  if (!file) return;
+  const selectedSheet = $('xlsx-sheet-select').value;
+  xlsxEditorOriginal = [];
+  xlsxEditorRows = [];
+  xlsxEditorDeletedRows.clear();
+  $('xlsx-grid').replaceChildren();
+  $('xlsx-editor-status').textContent = 'Loading worksheet…';
+  $('xlsx-save').disabled = true;
+  try {
+    const query = new URLSearchParams({ file });
+    if (selectedSheet) query.set('sheet', selectedSheet);
+    const response = await fetch('/api/xlsx/workbook?' + query.toString());
+    const workbook = await response.json();
+    if (!response.ok) throw new Error(workbook.error || 'Could not load worksheet.');
+    xlsxEditorModifiedNs = workbook.modified_ns;
+    xlsxEditorFileId = workbook.file;
+    xlsxEditorSheetName = workbook.sheet;
+    xlsxEditorOriginal = workbook.rows || [];
+    xlsxEditorRows = xlsxEditorOriginal.map((values, index) => ({
+      values: [...values],
+      sourceRow: index + 1,
+    }));
+    xlsxEditorDeletedRows.clear();
+
+    const sheetPicker = $('xlsx-sheet-select');
+    const currentSheet = sheetPicker.value;
+    sheetPicker.replaceChildren();
+    for (const name of workbook.sheets) {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      sheetPicker.appendChild(option);
+    }
+    sheetPicker.value = currentSheet && workbook.sheets.includes(currentSheet)
+      ? currentSheet : workbook.sheet;
+
+    renderWorkbookGrid();
+    const colCount = Math.max(0, ...xlsxEditorOriginal.map(row => row.length));
+    $('xlsx-editor-status').textContent =
+      `${workbook.name} · ${workbook.sheet} · ${xlsxEditorOriginal.length} rows × ${colCount} columns`;
+  } catch (error) {
+    $('xlsx-editor-status').textContent = `Could not load worksheet: ${error.message}`;
+    $('xlsx-grid').replaceChildren();
+  }
+}
+
+function renderWorkbookGrid() {
+  const table = $('xlsx-grid');
+  table.replaceChildren();
+  if (!xlsxEditorRows.length) {
+    $('xlsx-editor-status').textContent = 'This worksheet is empty.';
+    return;
+  }
+  const columnCount = Math.max(...xlsxEditorOriginal.map(row => row.length));
+  const head = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  const rowHeading = document.createElement('th');
+  rowHeading.textContent = 'Row';
+  headRow.appendChild(rowHeading);
+  for (let column = 0; column < columnCount; column++) {
+    const cell = document.createElement('th');
+    cell.textContent = String(xlsxEditorOriginal[0]?.[column] ?? `Column ${column + 1}`);
+    cell.style.position = 'sticky';
+    const resizeHandle = document.createElement('span');
+    resizeHandle.className = 'xlsx-col-resize';
+    resizeHandle.setAttribute('role', 'separator');
+    resizeHandle.setAttribute('aria-label', `Resize ${cell.textContent} column`);
+    resizeHandle.addEventListener('pointerdown', event => startWorkbookColumnResize(event, column));
+    cell.appendChild(resizeHandle);
+    headRow.appendChild(cell);
+  }
+  head.appendChild(headRow);
+  table.appendChild(head);
+
+  const body = document.createElement('tbody');
+  xlsxEditorRows.forEach((row, rowIndex) => {
+    const tableRow = document.createElement('tr');
+    const number = document.createElement('th');
+    number.scope = 'row';
+    number.textContent = row.sourceRow === null ? 'new' : String(row.sourceRow);
+    if (rowIndex > 0) {
+      const deleteButton = document.createElement('button');
+      deleteButton.type = 'button';
+      deleteButton.className = 'xlsx-delete-row';
+      deleteButton.textContent = '×';
+      deleteButton.title = `Delete row ${row.sourceRow ?? 'new'}`;
+      deleteButton.setAttribute('aria-label', `Delete row ${row.sourceRow ?? 'new'}`);
+      deleteButton.addEventListener('click', () => deleteWorkbookRow(rowIndex));
+      number.appendChild(deleteButton);
+    }
+    tableRow.appendChild(number);
+    for (let column = 0; column < columnCount; column++) {
+      const cell = document.createElement('td');
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = String(row.values[column] ?? '');
+      input.setAttribute('aria-label', `Row ${rowIndex + 1}, column ${column + 1}`);
+      if (row.sourceRow !== null
+        && input.value !== String(xlsxEditorOriginal[row.sourceRow - 1][column] ?? '')) {
+        cell.classList.add('xlsx-cell-dirty');
+      }
+      input.addEventListener('input', () => {
+        row.values[column] = input.value;
+        const changed = row.sourceRow === null
+          || input.value !== String(xlsxEditorOriginal[row.sourceRow - 1][column] ?? '');
+        cell.classList.toggle('xlsx-cell-dirty', changed);
+        updateWorkbookPendingStatus();
+      });
+      cell.appendChild(input);
+      tableRow.appendChild(cell);
+    }
+    body.appendChild(tableRow);
+  });
+  table.appendChild(body);
+  sizeWorkbookColumns(columnCount);
+  const addedRows = xlsxEditorRows.filter(row => row.sourceRow === null).length;
+  $('xlsx-editor-status').textContent =
+    `${xlsxEditorRows.length} rows × ${columnCount} columns · ${addedRows} new, ${xlsxEditorDeletedRows.size} deleted`;
+}
+
+function updateWorkbookPendingStatus() {
+  const saveButton = $('xlsx-save');
+  const pending = hasPendingWorkbookChanges();
+  saveButton.disabled = !pending;
+  if (pending) $('xlsx-editor-status').textContent = 'Unsaved cell, row addition, or row deletion';
+}
+
+function deleteWorkbookRow(rowIndex) {
+  const row = xlsxEditorRows[rowIndex];
+  if (!row || row.sourceRow === 1) return;
+  const rowLabel = row.sourceRow === null ? 'new row' : `row ${row.sourceRow}`;
+  if (!confirm(`Delete ${rowLabel}? This takes effect when you save.`)) return;
+  if (row.sourceRow !== null) xlsxEditorDeletedRows.add(row.sourceRow);
+  xlsxEditorRows.splice(rowIndex, 1);
+  renderWorkbookGrid();
+  updateWorkbookPendingStatus();
+}
+
+function sizeWorkbookColumns(columnCount) {
+  const table = $('xlsx-grid');
+  const oldColGroup = table.querySelector('colgroup');
+  if (oldColGroup) oldColGroup.remove();
+  const colGroup = document.createElement('colgroup');
+  const rowNumberCol = document.createElement('col');
+  rowNumberCol.style.width = '42px';
+  colGroup.appendChild(rowNumberCol);
+  const available = Math.max(100, $('xlsx-grid-wrap').clientWidth - 44);
+  const width = available / Math.max(columnCount, 1);
+  for (let column = 0; column < columnCount; column++) {
+    const col = document.createElement('col');
+    col.style.width = `${width}px`;
+    colGroup.appendChild(col);
+  }
+  table.prepend(colGroup);
+}
+
+function startWorkbookColumnResize(event, columnIndex) {
+  event.preventDefault();
+  const table = $('xlsx-grid');
+  const cols = table.querySelectorAll('colgroup col');
+  const col = cols[columnIndex + 1];
+  const nextCol = cols[columnIndex + 2];
+  if (!col || !nextCol) return;
+  const startX = event.clientX;
+  const initialWidth = col.getBoundingClientRect().width;
+  const nextWidth = nextCol.getBoundingClientRect().width;
+  const handle = event.currentTarget;
+  handle.classList.add('resizing');
+  handle.setPointerCapture(event.pointerId);
+  const move = pointerEvent => {
+    const delta = pointerEvent.clientX - startX;
+    const boundedDelta = Math.max(48 - initialWidth, Math.min(nextWidth - 48, delta));
+    col.style.width = `${initialWidth + boundedDelta}px`;
+    nextCol.style.width = `${nextWidth - boundedDelta}px`;
+  };
+  const stop = () => {
+    handle.classList.remove('resizing');
+    handle.removeEventListener('pointermove', move);
+    handle.removeEventListener('pointerup', stop);
+    handle.removeEventListener('pointercancel', stop);
+  };
+  handle.addEventListener('pointermove', move);
+  handle.addEventListener('pointerup', stop);
+  handle.addEventListener('pointercancel', stop);
+}
+
+function addWorkbookRow() {
+  const columnCount = Math.max(0, ...xlsxEditorOriginal.map(row => row.length));
+  if (!columnCount) return;
+  xlsxEditorRows.push({ values: Array(columnCount).fill(''), sourceRow: null });
+  renderWorkbookGrid();
+  updateWorkbookPendingStatus();
+  const inputs = $('xlsx-grid').querySelectorAll('tbody tr:last-child input');
+  if (inputs.length) inputs[0].focus();
+}
+
+async function saveWorkbookEdits() {
+  if (!hasPendingWorkbookChanges()) return;
+  const workbookChanges = collectWorkbookChanges();
+  const saveButton = $('xlsx-save');
+  saveButton.disabled = true;
+  $('xlsx-editor-status').textContent = 'Saving workbook…';
+  try {
+    const response = await fetch('/api/xlsx/workbook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        file: $('xlsx-file-select').value,
+        sheet: $('xlsx-sheet-select').value,
+        modified_ns: xlsxEditorModifiedNs,
+        changes: workbookChanges.changes,
+        new_rows: workbookChanges.new_rows,
+        delete_rows: workbookChanges.delete_rows,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not save workbook.');
+    xlsxEditorDeletedRows.clear();
+    $('xlsx-editor-status').textContent = 'Saved. Reloading worksheet…';
+    await loadWorkbookWorksheet();
+  } catch (error) {
+    $('xlsx-editor-status').textContent = `Save failed: ${error.message}`;
+    saveButton.disabled = !hasPendingWorkbookChanges();
+  }
 }
 
 // ── Pills ─────────────────────────────────────────────────────
@@ -753,6 +1174,7 @@ function applyTemplateMode() {
   // Disable EMR / billing actions in meeting mode (no clinical context)
   const oscar = $('btn-oscar'); if (oscar) oscar.classList.toggle('hidden', isMeeting);
   const bill  = $('btn-billing'); if (bill)  bill.classList.toggle('hidden', isMeeting);
+  const exportXlsx = $('btn-export-xlsx'); if (exportXlsx) exportXlsx.classList.toggle('hidden', isMeeting);
   // Update note-area placeholder
   const note = $('note-full');
   if (note) note.placeholder = isMeeting
@@ -1104,6 +1526,8 @@ async function loadHistoryNote(filename) {
     if (data.patient_name) $('patient-name').value = data.patient_name;
     if (data.patient_dob)  $('patient-dob').value  = data.patient_dob;
     if (data.health_card)  $('health-card').value  = data.health_card;
+    if (data.service_date || data.timestamp) $('service-date').value = data.service_date || data.timestamp.slice(0, 10);
+    if (data.service_time || data.timestamp) $('service-time').value = data.service_time || data.timestamp.slice(11, 16);
     if (data.transcript)   $('transcript').value   = data.transcript;
     if (data.soap_note) {
       currentNote = data.soap_note;
@@ -1111,6 +1535,7 @@ async function loadHistoryNote(filename) {
       $('btn-copy').disabled    = false;
       $('btn-oscar').disabled   = false;
       $('btn-billing').disabled = false;
+      $('btn-export-xlsx').disabled = data.soap_note.note_format === 'freeform';
     }
     // Restore audio player if the note has an associated audio file
     if (data.audio_filename) {

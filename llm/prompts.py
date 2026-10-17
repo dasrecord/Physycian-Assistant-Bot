@@ -52,6 +52,12 @@ SOAP_SYSTEM_PROMPT = (
     "11. FORMATTING: Every sub-section label (HPI, PMHx, FHx, SHx, ROS, Medications, Allergies, "
     "Vitals, Physical examination, Investigations, Referrals, Follow-up, DDx, etc.) MUST start "
     "on its own new line. Never run two sub-sections together on the same line.\n"
+    "12. CLINICIAN-AUTHORED VOICE: Write as the treating clinician documenting directly in the "
+    "patient's chart, not as a third-person narrator. Prefer concise charting such as 'Reports...' "
+    "or 'Discussed...' over 'The patient reports...' or 'The physician discussed...'. Use first "
+    "person for the clinician's decisions and actions when natural (e.g., 'I discussed...' or "
+    "'I will...'), without forcing 'I' into every sentence. Attribute patient-reported history "
+    "accurately; do not turn it into a clinician-observed finding.\n"
 )
 
 _BASE_FORMAT = (

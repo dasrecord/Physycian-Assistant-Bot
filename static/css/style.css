@@ -239,7 +239,7 @@ button.pill:hover { border-color: var(--border2); color: var(--text); }
 /* ── Workspace ─────────────────────────────────────────── */
 .workspace {
   display: grid;
-  grid-template-columns: 340px 1fr;
+  grid-template-columns: minmax(260px, .9fr) minmax(420px, 1.4fr) minmax(250px, .85fr);
   gap: 14px;
   padding: 14px;
   height: calc(100vh - 92px);
@@ -253,6 +253,7 @@ button.pill:hover { border-color: var(--border2); color: var(--text); }
   gap: 10px;
   overflow-y: auto;
   padding-right: 2px;
+  min-height: 0;
 }
 .left-panel::-webkit-scrollbar { width: 4px; }
 .left-panel::-webkit-scrollbar-track { background: transparent; }
@@ -262,6 +263,16 @@ button.pill:hover { border-color: var(--border2); color: var(--text); }
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
+}
+
+.history-panel {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  min-height: 0;
+  min-width: 0;
+  padding-right: 2px;
 }
 
 /* ── Cards ─────────────────────────────────────────────── */
@@ -475,7 +486,7 @@ select option { background: var(--surface2); }
   align-items: center;
   justify-content: space-between;
 }
-.note-actions { display: flex; gap: 6px; }
+.note-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 
 /* ── Note full textarea ────────────────────────────────── */
 .note-area {
@@ -503,6 +514,31 @@ select option { background: var(--surface2); }
 .icd9-row.hidden { display: none; }
 .icd9-label { font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); white-space: nowrap; }
 .icd9-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.prolonged-counselling-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text2);
+  font-size: .7rem;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.prolonged-counselling-toggle:hover {
+  border-color: var(--border2);
+  color: var(--text);
+}
+.prolonged-counselling-toggle input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
 .icd9-chip {
   background: rgba(74,125,245,.14);
   border: 1px solid rgba(74,125,245,.3);
@@ -631,6 +667,147 @@ select option { background: var(--surface2); }
   overflow-y: auto;
   padding: 20px;
 }
+.xlsx-editor-box {
+  display: flex;
+  flex-direction: column;
+  width: min(1400px, 96vw);
+  height: min(88vh, 1000px);
+  max-height: 88vh;
+  overflow: hidden;
+  gap: 10px;
+}
+.xlsx-editor-box .modal-hdr { flex: 0 0 auto; margin-bottom: 0; }
+.xlsx-editor-toolbar {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+.xlsx-select-label {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text2);
+  font-size: .78rem;
+}
+.xlsx-select-label select { min-width: 0; }
+.xlsx-editor-status {
+  flex: 0 0 auto;
+  min-height: 1.3em;
+  color: var(--text2);
+  font-size: .8rem;
+}
+.xlsx-grid-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.xlsx-grid {
+  width: 100%;
+  min-width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: .78rem;
+}
+.xlsx-grid th,
+.xlsx-grid td {
+  min-width: 0;
+  max-width: none;
+  padding: 0;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.xlsx-grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 7px 10px 7px 6px;
+  background: var(--surface3);
+  color: var(--text2);
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.xlsx-grid thead th:first-child {
+  width: 42px;
+  left: 0;
+  z-index: 3;
+  white-space: nowrap;
+}
+.xlsx-col-resize {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  z-index: 4;
+  width: 7px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+}
+.xlsx-col-resize:hover,
+.xlsx-col-resize.resizing { background: var(--accent); opacity: .7; }
+.xlsx-grid tbody th {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  width: 42px;
+  padding: 5px 6px;
+  background: var(--surface);
+  color: var(--muted);
+  text-align: right;
+}
+.xlsx-delete-row {
+  margin-left: 4px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: .85rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.xlsx-delete-row:hover { color: var(--danger, #ef4444); }
+.xlsx-grid td input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 5px;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface2);
+  font-size: .78rem;
+  text-overflow: ellipsis;
+}
+.xlsx-grid td input:focus { background: var(--surface3); }
+.xlsx-grid td.xlsx-cell-dirty input { background: rgba(245,158,11,.14); }
+.xlsx-editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 auto;
+  color: var(--text2);
+  font-size: .78rem;
+}
+.xlsx-editor-actions { display: flex; align-items: center; gap: 8px; }
+.xlsx-add-row {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border2);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text2);
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.xlsx-add-row:hover { color: var(--text); border-color: var(--accent); background: var(--surface2); }
 .modal-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .modal-hdr h3 { font-size: .95rem; }
 .modal-close { background: none; border: none; color: var(--muted); font-size: 1.4rem; cursor: pointer; line-height: 1; }
@@ -660,6 +837,11 @@ select option { background: var(--surface2); }
 .btn-danger { background: var(--danger); color: #fff; border: none; border-radius: 5px; padding: 3px 10px; cursor: pointer; font-size: .8rem; }
 .btn-danger:hover { filter: brightness(1.15); }
 
+@media (max-width: 600px) {
+  .xlsx-editor-toolbar { align-items: stretch; flex-direction: column; }
+  .xlsx-editor-footer { align-items: stretch; flex-direction: column; }
+}
+
 /* ── Scrollbars (right panel) ──────────────────────────── */
 .note-area::-webkit-scrollbar { width: 5px; }
 .note-area::-webkit-scrollbar-track { background: transparent; }
@@ -669,11 +851,29 @@ select option { background: var(--surface2); }
 @media (max-width: 760px) {
   .workspace { grid-template-columns: 1fr; overflow-y: auto; height: auto; }
   .right-panel { min-height: 400px; }
+  .history-panel { overflow: visible; }
+  body, html { overflow: auto; }
+}
+
+@media (min-width: 761px) and (max-width: 1100px) {
+  .workspace {
+    grid-template-columns: minmax(240px, 1fr) minmax(340px, 1.3fr);
+    overflow-y: auto;
+    height: auto;
+  }
+  .history-panel { grid-column: 1 / -1; }
+  .history-list { max-height: 320px; }
   body, html { overflow: auto; }
 }
 
 /* ── Patient history panel ─────────────────────────────── */
-.history-card { padding: 10px 14px; gap: 0; position: relative; }
+.history-card {
+  flex: 1;
+  min-height: 0;
+  padding: 10px 14px;
+  gap: 0;
+  position: relative;
+}
 .history-hdr {
   display: flex; align-items: center;
   padding: 2px 0;
@@ -684,7 +884,9 @@ select option { background: var(--surface2); }
 }
 
 .history-list {
-  max-height: 260px;
+  flex: 1;
+  min-height: 0;
+  max-height: none;
   overflow-y: auto;
   margin-top: 6px;
   background: var(--surface2);
@@ -743,6 +945,15 @@ select option { background: var(--surface2); }
   padding: 7px 2px 2px; border-top: 1px solid var(--border2); margin-top: 4px;
 }
 .history-date-sep:first-child { border-top: none; margin-top: 0; padding-top: 2px; }
+
+@media (max-width: 1100px) {
+  .history-card { flex: initial; min-height: auto; }
+  .history-list { flex: initial; min-height: auto; max-height: 320px; }
+}
+
+@media (max-width: 760px) {
+  .history-list { max-height: 260px; }
+}
 
 /* ── Encounters: per-row audio actions ─────────────────── */
 .enc-row { padding: 8px 10px; gap: 3px; }

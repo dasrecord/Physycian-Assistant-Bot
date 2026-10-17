@@ -12,7 +12,9 @@ A local, private AI scribe for physicians. Records patient consultations, transc
 - 📋 **Note templates** — Standard, Mental Health, Neurology, Pediatric, Urgent Care
 - 📱 **Mobile-friendly** — accessible from your phone on the same WiFi network
 - 🏥 **OSCAR Pro integration** — post notes directly to EMR (optional)
-- 💰 **Billing assist** — visit type and duration-based billing codes (Ontario)
+- 💰 **Billing assist** — age-banded BC telehealth items; prolonged counselling requires a counselling visit and 20 minutes (or clinician confirmation); XLSX export rounds times to five minutes and moves overlapping rows to the next open slot
+- 📊 **Billing export** — append a completed encounter to the configured Medical-Billing-Bot workbook
+- ✏️ **Workbook editor** — review and edit the current billing export and archived `.xlsx` workbooks in-app
 
 ---
 

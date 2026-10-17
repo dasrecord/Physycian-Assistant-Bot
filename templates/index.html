@@ -116,26 +116,6 @@ Health Card: 9743702042"></textarea>
       <button id="btn-generate" class="btn btn-primary" disabled>&#128196; Generate SOAP Note</button>
     </div>
 
-    <!-- Encounters (consolidated notes + audio) -->
-    <div class="card history-card encounters-card">
-      <div class="history-hdr">
-        <div class="history-hdr-title" onclick="toggleEncounters()">
-          <span class="field-label">&#128203; Encounters</span>
-          <span id="history-count" class="history-badge hidden">0</span>
-          <span id="audio-size" class="audio-size-label"></span>
-          <span id="history-chevron" class="history-chevron">&#9660;</span>
-        </div>
-      </div>
-      <div class="history-subhdr">
-        <input type="date" id="history-date-pick" class="history-date-pick" title="Filter by date (clear for all dates)" />
-        <div class="audio-hdr-actions">
-          <button class="btn-link btn-link-sm" onclick="purgeAudio('orphans')" title="Delete audio files not linked to any saved note">Purge orphans</button>
-          <button class="btn-link btn-link-sm danger" onclick="purgeAudio('all')" title="Delete ALL session audio files">Purge all</button>
-        </div>
-      </div>
-      <div id="history-list" class="history-list hidden"></div>
-    </div>
-
     <!-- Keyboard shortcuts hint -->
     <div class="kbd-hint">
       <span><kbd>Space</kbd> Rec</span>
@@ -147,7 +127,7 @@ Health Card: 9743702042"></textarea>
 
   </div>
 
-  <!-- RIGHT PANEL -->
+  <!-- MIDDLE PANEL -->
   <div class="right-panel">
     <div class="card note-card">
       <div class="note-header">
@@ -156,6 +136,12 @@ Health Card: 9743702042"></textarea>
           <button id="btn-copy"    class="btn btn-ghost btn-sm" disabled>&#128203; Copy</button>
           <button id="btn-oscar"   class="btn btn-oscar btn-sm" disabled>&#8594; OSCAR</button>
           <button id="btn-billing" class="btn btn-billing btn-sm" disabled>&#128179; Billing</button>
+          <label class="prolonged-counselling-toggle" for="prolonged-counselling" title="For counselling visits of at least 20 minutes">
+            <input id="prolonged-counselling" type="checkbox" />
+            <span>20+ min</span>
+          </label>
+          <button id="btn-export-xlsx" class="btn btn-ghost btn-sm" disabled title="Append this encounter to the Medical-Billing-Bot workbook">&#128202; XLSX</button>
+          <button id="btn-edit-xlsx" class="btn btn-ghost btn-sm" title="Edit billing export workbooks">&#9998; Edit XLSX</button>
         </div>
       </div>
       <textarea id="note-full" class="note-area" placeholder="SOAP note will stream here as the AI generates it&#8230;&#10;&#10;Paste a transcript on the left and click Generate, or record a consultation."></textarea>
@@ -180,7 +166,59 @@ Health Card: 9743702042"></textarea>
     </div>
   </div>
 
+  <!-- RIGHT PANEL -->
+  <div class="history-panel">
+    <div class="card history-card encounters-card">
+      <div class="history-hdr">
+        <div class="history-hdr-title" onclick="toggleEncounters()">
+          <span class="field-label">&#128203; Encounters</span>
+          <span id="history-count" class="history-badge hidden">0</span>
+          <span id="audio-size" class="audio-size-label"></span>
+          <span id="history-chevron" class="history-chevron">&#9660;</span>
+        </div>
+      </div>
+      <div class="history-subhdr">
+        <input type="date" id="history-date-pick" class="history-date-pick" title="Filter by date (clear for all dates)" />
+        <div class="audio-hdr-actions">
+          <button class="btn-link btn-link-sm" onclick="purgeAudio('orphans')" title="Delete audio files not linked to any saved note">Purge orphans</button>
+          <button class="btn-link btn-link-sm danger" onclick="purgeAudio('all')" title="Delete ALL session audio files">Purge all</button>
+        </div>
+      </div>
+      <div id="history-list" class="history-list hidden"></div>
+    </div>
+  </div>
+
 </main>
+
+<!-- Billing workbook editor -->
+<div id="xlsx-editor-modal" class="modal hidden">
+  <div class="modal-box xlsx-editor-box">
+    <div class="modal-hdr">
+      <h3>Billing Workbook Editor</h3>
+      <button id="xlsx-editor-close" class="modal-close" aria-label="Close workbook editor">&times;</button>
+    </div>
+    <div class="xlsx-editor-toolbar">
+      <label class="xlsx-select-label">Workbook
+        <select id="xlsx-file-select"></select>
+      </label>
+      <label class="xlsx-select-label">Worksheet
+        <select id="xlsx-sheet-select"></select>
+      </label>
+      <button id="xlsx-reload" class="btn btn-ghost btn-sm">Reload</button>
+    </div>
+    <div id="xlsx-editor-status" class="xlsx-editor-status" role="status">Loading workbooks…</div>
+    <div id="xlsx-grid-wrap" class="xlsx-grid-wrap">
+      <table id="xlsx-grid" class="xlsx-grid"></table>
+    </div>
+    <div class="xlsx-editor-footer">
+      <span>Click a cell to edit it. Drag a column edge to resize. Changes save to the selected workbook.</span>
+      <div class="xlsx-editor-actions">
+        <button id="xlsx-add-row" class="xlsx-add-row" title="Add a blank row" aria-label="Add a blank row">+</button>
+        <button id="xlsx-save" class="btn btn-primary btn-sm" disabled>Save changes</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- Template modal -->
 <div id="template-modal" class="modal hidden" onclick="closeTemplateModal(event)">

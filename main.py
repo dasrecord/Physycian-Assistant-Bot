@@ -9,14 +9,21 @@ import sys
 import json
 import uuid
 import threading
+import stat
 from datetime import datetime
 from pathlib import Path
+from zipfile import BadZipFile
 
 import tempfile
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_socketio import SocketIO, emit
+from openpyxl import load_workbook
+from openpyxl.utils.exceptions import InvalidFileException
 
-from config import PORT, AUDIO_DIR, SESSION_DIR, OLLAMA_MODEL, OLLAMA_URL
+from config import (
+    PORT, AUDIO_DIR, SESSION_DIR, OLLAMA_MODEL, OLLAMA_URL,
+    DOCTOR_LAST_NAME, DOCTOR_FIRST_NAME,
+)
 from transcription.stt import WhisperTranscriber, set_correction_callback
 from llm.soap_generator import SOAPGenerator
 from emr.oscar import OscarEMR
@@ -37,6 +44,15 @@ _oscar = None
 session: dict = {}
 
 TEMPLATES_FILE = Path(__file__).parent / "note_templates.json"
+BILLING_EXPORT_FILE = (
+    Path(__file__).resolve().parent.parent
+    / "Medical-Billing-Bot"
+    / "20261016_billing_export.xlsx"
+)
+BILLING_ARCHIVE_DIRS = tuple(
+    BILLING_EXPORT_FILE.parent / folder
+    for folder in ("archive", "archives")
+)
 
 
 def _ssl_context_from_env():
@@ -105,6 +121,41 @@ def _get_available_gb():
         return None
 
 
+def _resolve_billing_workbook(file_id):
+    """Resolve a workbook identifier strictly within the current export/archive folders."""
+    parts = Path(str(file_id or "")).parts
+    if len(parts) != 2 or parts[0] not in {"current", "archive", "archives"}:
+        return None
+    filename = parts[1]
+    if Path(filename).name != filename or Path(filename).suffix.lower() != ".xlsx":
+        return None
+
+    if parts[0] == "current":
+        path = BILLING_EXPORT_FILE
+        if filename != path.name:
+            return None
+    else:
+        archive_dir = next(
+            (directory for directory in BILLING_ARCHIVE_DIRS if directory.name == parts[0]),
+            None,
+        )
+        if archive_dir is None:
+            return None
+        path = archive_dir / filename
+
+    if path.is_symlink() or not path.is_file():
+        return None
+    if not path.resolve().is_relative_to(BILLING_EXPORT_FILE.parent.resolve()):
+        return None
+    return path
+
+
+def _workbook_cell_value(value):
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
 # ── Note history ─────────────────────────────────────────────────────────────
 
 def _save_note(sess, note):
@@ -112,6 +163,7 @@ def _save_note(sess, note):
     try:
         safe_name = sess.get("patient_name", "unknown").replace(" ", "_")[:20]
         ts = datetime.now().isoformat()
+        started_at = sess.get("start_time", "")
         fname = f"{ts[:10]}_{sess.get('id','x')}_{safe_name}.json"
         entry = {
             "session_id":    sess.get("id", ""),
@@ -120,6 +172,8 @@ def _save_note(sess, note):
             "health_card":   sess.get("health_card", ""),
             "visit_type":    sess.get("visit_type", "standard"),
             "timestamp":     ts,
+            "service_date":  sess.get("service_date") or started_at[:10] or ts[:10],
+            "service_time":  sess.get("service_time") or (started_at[11:16] if len(started_at) >= 16 else ts[11:16]),
             "soap_note":     note,
             "transcript":    sess.get("transcript", ""),
             "audio_filename": os.path.basename(sess.get("audio_path", "") or ""),
@@ -222,11 +276,64 @@ def update_history_note(filename):
     return jsonify({"status": "updated"})
 
 
+def _billing_service_times(data, now=None):
+    """Build rounded local billing times from the service-time field and elapsed timer."""
+    from billing import add_elapsed_time, round_billing_time
+
+    now = now or datetime.now()
+    session_start = session.get("start_time", "")
+    service_date = str(
+        data.get("service_date")
+        or session.get("service_date")
+        or (session_start[:10] if len(session_start) >= 10 else now.strftime("%Y-%m-%d"))
+    ).strip()
+    start_time = str(
+        data.get("service_time")
+        or session.get("service_time")
+        or (session_start[11:16] if len(session_start) >= 16 else now.strftime("%H:%M"))
+    ).strip()
+    elapsed_seconds = data.get("duration_seconds", 0)
+    if (
+        not isinstance(elapsed_seconds, int)
+        or isinstance(elapsed_seconds, bool)
+        or not 0 <= elapsed_seconds <= 24 * 60 * 60
+    ):
+        raise ValueError("Session duration must be a whole number of seconds from 0 to 24 hours.")
+    prolonged_counselling = data.get("prolonged_counselling", False)
+    if not isinstance(prolonged_counselling, bool):
+        raise ValueError("Prolonged counselling confirmation must be checked or unchecked.")
+    if prolonged_counselling and data.get("visit_type") != "counselling":
+        raise ValueError("Select Counselling before confirming a prolonged counselling visit.")
+    if prolonged_counselling or (
+        data.get("visit_type") == "counselling" and elapsed_seconds >= 20 * 60
+    ):
+        elapsed_seconds = max(elapsed_seconds, 20 * 60)
+
+    rounded_start = round_billing_time(start_time)
+    if elapsed_seconds:
+        rounded_end = add_elapsed_time(start_time, elapsed_seconds)
+    else:
+        end_time = str(data.get("service_end_time") or now.strftime("%H:%M")).strip()
+        rounded_end = round_billing_time(end_time)
+    return service_date, rounded_start, rounded_end, elapsed_seconds
+
+
+def _is_prolonged_counselling(data, visit_type, elapsed_seconds):
+    manually_confirmed = data.get("prolonged_counselling", False)
+    if not isinstance(manually_confirmed, bool):
+        raise ValueError("Prolonged counselling confirmation must be checked or unchecked.")
+    if manually_confirmed and visit_type != "counselling":
+        raise ValueError("Select Counselling before confirming a prolonged counselling visit.")
+    return visit_type == "counselling" and (
+        elapsed_seconds >= 20 * 60 or manually_confirmed
+    )
+
+
 @app.route("/api/update-session", methods=["POST"])
 def update_session_fields():
     """Update patient fields in the active session without clearing transcript/audio."""
     data = request.get_json(force=True)
-    for field in ("patient_name", "patient_dob", "health_card", "visit_type"):
+    for field in ("patient_name", "patient_dob", "health_card", "visit_type", "service_date", "service_time"):
         if data.get(field) is not None:
             session[field] = str(data[field]).strip()
     return jsonify({"status": "ok"})
@@ -563,6 +670,8 @@ def start_session():
         "patient_dob":   data.get("patient_dob", "").strip(),
         "health_card":   data.get("health_card", "").strip(),
         "visit_type":    data.get("visit_type", "standard"),
+        "service_date":  data.get("service_date", "").strip(),
+        "service_time":  data.get("service_time", "").strip(),
         "start_time":    datetime.now().isoformat(),
         "transcript":    "",
         "soap_note":     None,
@@ -688,7 +797,7 @@ def generate_note():
         return jsonify({"error": "No transcript available"}), 400
 
     # Prefer patient fields sent by the client (always current DOM values)
-    for field in ("patient_name", "patient_dob", "health_card", "visit_type"):
+    for field in ("patient_name", "patient_dob", "health_card", "visit_type", "service_date", "service_time"):
         if data.get(field) is not None:
             session[field] = str(data[field]).strip()
 
@@ -800,11 +909,13 @@ def submit_billing():
     hc         = data.get("health_card")  or session.get("health_card",  "")
     visit_type = data.get("visit_type")   or session.get("visit_type", "standard")
 
-    # Derive timing from server session (more reliable than client timer)
-    sess_start   = session.get("start_time", "")
-    date_svc     = sess_start[:10] if len(sess_start) >= 10 else datetime.now().strftime("%Y-%m-%d")
-    start_hm     = sess_start[11:16] if len(sess_start) >= 16 else ""   # "HH:MM"
-    end_hm       = datetime.now().strftime("%H:%M")
+    try:
+        date_svc, start_hm, end_hm, duration_seconds = _billing_service_times(data)
+        prolonged_counselling = _is_prolonged_counselling(
+            data, visit_type, duration_seconds
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     def _bill():
         socketio.emit("status", {"msg": "Submitting billing...", "level": "info"})
@@ -819,6 +930,7 @@ def submit_billing():
                 date_of_service=date_svc,
                 start_time=start_hm,
                 end_time=end_hm,
+                prolonged_counselling=prolonged_counselling,
             )
             socketio.emit("billing_result", result)
             socketio.emit("status", {"msg": "Billing submitted.", "level": "success"})
@@ -827,6 +939,293 @@ def submit_billing():
 
     threading.Thread(target=_bill, daemon=True).start()
     return jsonify({"status": "billing"})
+
+
+@app.route("/api/export-billing", methods=["POST"])
+def export_billing():
+    """Append the current encounter to the supplied Medical-Billing-Bot workbook."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid billing export request"}), 400
+
+    note = data.get("soap_note") or session.get("soap_note")
+    if not isinstance(note, dict) or note.get("note_format") == "freeform":
+        return jsonify({"error": "No clinical note available to export"}), 400
+
+    icd9_codes = note.get("icd9_codes") or []
+    if isinstance(icd9_codes, str):
+        icd9_codes = [icd9_codes]
+    if not icd9_codes:
+        return jsonify({"error": "The note has no ICD-9 diagnosis codes to export"}), 400
+
+    patient_name = str(data.get("patient_name") or session.get("patient_name") or "").strip()
+    if not patient_name:
+        return jsonify({"error": "Patient name is required for billing export"}), 400
+
+    patient_dob = str(data.get("patient_dob") or session.get("patient_dob") or "").strip()
+    health_card = str(data.get("health_card") or session.get("health_card") or "").strip()
+    visit_type = str(data.get("visit_type") or session.get("visit_type") or "standard")
+    now = datetime.now()
+    try:
+        date_of_service, start_time, end_time, duration_seconds = _billing_service_times(data, now)
+        prolonged_counselling = _is_prolonged_counselling(
+            data, visit_type, duration_seconds
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    requested_times = (date_of_service, start_time, end_time)
+
+    from billing import append_billing_export_row, build_billing_export_row
+    from zipfile import BadZipFile
+    from openpyxl.utils.exceptions import InvalidFileException
+
+    try:
+        row = build_billing_export_row(
+            patient_name=patient_name,
+            patient_dob=patient_dob,
+            health_card=health_card,
+            icd9_codes=icd9_codes,
+            visit_type=visit_type,
+            date_of_service=date_of_service,
+            start_time=start_time,
+            end_time=end_time,
+            doc_last_name=DOCTOR_LAST_NAME or "Das",
+            doc_first_name=DOCTOR_FIRST_NAME or "Prasenjit",
+            prolonged_counselling=prolonged_counselling,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    try:
+        row_number = append_billing_export_row(row, str(BILLING_EXPORT_FILE))
+    except ValueError as exc:
+        app.logger.warning("Billing workbook export blocked: %s", exc)
+        return jsonify({"error": str(exc)}), 409
+    except (OSError, BadZipFile, InvalidFileException) as exc:
+        app.logger.exception("Billing workbook export failed")
+        return jsonify({"error": f"Billing workbook export failed: {exc}"}), 500
+    return jsonify({
+        "status": "exported",
+        "row": row_number,
+        "billing_item": row["billing_item"],
+        "date_of_service": row["date_of_service"],
+        "start_time": row["start_time"],
+        "end_time": row["end_time"],
+        "time_adjusted": requested_times != (
+            row["date_of_service"], row["start_time"], row["end_time"]
+        ),
+    })
+
+
+@app.route("/api/xlsx/workbooks", methods=["GET"])
+def list_billing_workbooks():
+    """List the current export and archived billing workbooks available to edit."""
+    workbooks = []
+    candidates = []
+    if BILLING_EXPORT_FILE.is_file():
+        candidates.append(("current", BILLING_EXPORT_FILE))
+    for archive_dir in BILLING_ARCHIVE_DIRS:
+        if archive_dir.is_dir():
+            candidates.extend(
+                (archive_dir.name, path)
+                for path in archive_dir.glob("*.xlsx")
+                if path.is_file() and not path.is_symlink()
+            )
+
+    for folder, path in sorted(candidates, key=lambda item: (item[0] != "current", item[1].name)):
+        if not path.resolve().is_relative_to(BILLING_EXPORT_FILE.parent.resolve()):
+            continue
+        try:
+            workbook = load_workbook(path, read_only=True, data_only=True)
+        except (OSError, ValueError, InvalidFileException, BadZipFile):
+            app.logger.exception("Could not inspect billing workbook %s", path)
+            continue
+        try:
+            sheets = [
+                {"name": sheet.title, "rows": sheet.max_row, "columns": sheet.max_column}
+                for sheet in workbook.worksheets
+            ]
+            workbooks.append({
+                "id": f"{folder}/{path.name}",
+                "name": path.name,
+                "sheets": sheets,
+            })
+        finally:
+            workbook.close()
+    return jsonify(workbooks)
+
+
+@app.route("/api/xlsx/workbook", methods=["GET"])
+def read_billing_workbook():
+    file_id = request.args.get("file", "")
+    path = _resolve_billing_workbook(file_id)
+    if path is None:
+        return jsonify({"error": "Workbook not found"}), 404
+    sheet_name = request.args.get("sheet", "")
+    try:
+        workbook = load_workbook(path, read_only=True, data_only=False)
+        if sheet_name and sheet_name not in workbook.sheetnames:
+            workbook.close()
+            return jsonify({"error": "Worksheet not found"}), 404
+        sheet = workbook[sheet_name] if sheet_name else workbook.active
+        rows = [
+            [_workbook_cell_value(value) for value in row]
+            for row in sheet.iter_rows(values_only=True)
+        ]
+        result = {
+            "file": file_id,
+            "name": path.name,
+            "sheet": sheet.title,
+            "sheets": workbook.sheetnames,
+            "rows": rows,
+            "modified_ns": str(path.stat().st_mtime_ns),
+        }
+        workbook.close()
+        return jsonify(result)
+    except (OSError, ValueError, InvalidFileException, BadZipFile) as exc:
+        app.logger.exception("Could not read billing workbook %s", path)
+        return jsonify({"error": f"Could not read workbook: {exc}"}), 500
+
+
+@app.route("/api/xlsx/workbook", methods=["POST"])
+def save_billing_workbook():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid workbook edit request"}), 400
+
+    file_id = data.get("file", "")
+    path = _resolve_billing_workbook(file_id)
+    if path is None:
+        return jsonify({"error": "Workbook not found"}), 404
+    sheet_name = data.get("sheet")
+    changes = data.get("changes")
+    add_rows = data.get("add_rows", 0)
+    new_rows = data.get("new_rows", [])
+    delete_rows = data.get("delete_rows", [])
+    expected_mtime = data.get("modified_ns")
+    if (
+        not isinstance(sheet_name, str)
+        or not isinstance(changes, list)
+        or not isinstance(new_rows, list)
+        or not isinstance(delete_rows, list)
+        or not isinstance(add_rows, int)
+        or isinstance(add_rows, bool)
+        or add_rows < 0
+        or add_rows > 100
+        or len(new_rows) + add_rows > 100
+        or (not changes and not new_rows and not delete_rows and add_rows == 0)
+    ):
+        return jsonify({"error": "Worksheet, valid cell edits, or added rows are required"}), 400
+    if len(changes) > 1000:
+        return jsonify({"error": "Save at most 1,000 edited cells at a time"}), 400
+    if not isinstance(expected_mtime, str) or not expected_mtime.isdecimal():
+        return jsonify({"error": "Reload the workbook before saving"}), 400
+    if str(path.stat().st_mtime_ns) != expected_mtime:
+        return jsonify({"error": "This workbook changed since it was opened. Reload before saving."}), 409
+
+    try:
+        workbook = load_workbook(path, data_only=False)
+        if sheet_name not in workbook.sheetnames:
+            workbook.close()
+            return jsonify({"error": "Worksheet not found"}), 404
+        sheet = workbook[sheet_name]
+        original_max_row = sheet.max_row
+        if not all(
+            isinstance(row, int) and not isinstance(row, bool)
+            and 2 <= row <= original_max_row
+            for row in delete_rows
+        ) or len(delete_rows) != len(set(delete_rows)):
+            workbook.close()
+            return jsonify({"error": "Only existing data rows can be deleted"}), 400
+        deleted_set = set(delete_rows)
+        if len(changes) > 1000:
+            workbook.close()
+            return jsonify({"error": "Save at most 1,000 edited cells at a time"}), 400
+
+        from billing import normalise_diagnosis_value
+
+        header_columns = {
+            str(sheet.cell(row=1, column=column).value or "")
+            .strip()
+            .lower()
+            .replace(" ", "_"): column
+            for column in range(1, sheet.max_column + 1)
+        }
+
+        def normalise_cell(column, value):
+            header = next(
+                (name for name, index in header_columns.items() if index == column),
+                "",
+            )
+            if header in {"last_name", "first_name"}:
+                return value.upper()
+            if header == "diagnosis":
+                return normalise_diagnosis_value(value)
+            return value
+
+        seen_cells = set()
+        for change in changes:
+            if not isinstance(change, dict):
+                workbook.close()
+                return jsonify({"error": "Invalid cell edit"}), 400
+            row = change.get("row")
+            column = change.get("column")
+            value = change.get("value")
+            if (
+                not isinstance(row, int) or isinstance(row, bool) or row < 1
+                or not isinstance(column, int) or isinstance(column, bool) or column < 1
+                or row > original_max_row
+                or column > sheet.max_column
+                or not isinstance(value, str) or len(value) > 5000
+                or row in deleted_set
+            ):
+                workbook.close()
+                return jsonify({"error": "Cell edit is outside the worksheet, targets a deleted row, or has an invalid value"}), 400
+            coordinate = (row, column)
+            if coordinate in seen_cells:
+                workbook.close()
+                return jsonify({"error": "Duplicate cell edits are not allowed"}), 400
+            seen_cells.add(coordinate)
+            normalized_value = normalise_cell(column, value)
+            sheet.cell(row=row, column=column).value = normalized_value if normalized_value else None
+
+        for row in sorted(deleted_set, reverse=True):
+            sheet.delete_rows(row, 1)
+
+        for values in new_rows:
+            if (
+                not isinstance(values, list)
+                or len(values) > sheet.max_column
+                or any(not isinstance(value, str) or len(value) > 5000 for value in values)
+            ):
+                workbook.close()
+                return jsonify({"error": "New worksheet rows must contain valid text cells"}), 400
+            row_values = [
+                normalise_cell(column, values[column - 1] if column <= len(values) else "")
+                for column in range(1, sheet.max_column + 1)
+            ]
+            sheet.append(row_values)
+        for _ in range(add_rows):
+            sheet.append([""] + [None] * max(sheet.max_column - 1, 0))
+
+        file_mode = stat.S_IMODE(path.stat().st_mode)
+        with tempfile.NamedTemporaryFile(
+            dir=path.parent, suffix=".xlsx", prefix=".billing-edit-", delete=False
+        ) as temp_file:
+            temp_path = Path(temp_file.name)
+        try:
+            workbook.save(temp_path)
+            workbook.close()
+            os.chmod(temp_path, file_mode)
+            if str(path.stat().st_mtime_ns) != expected_mtime:
+                return jsonify({"error": "This workbook changed while saving. Reload before trying again."}), 409
+            os.replace(temp_path, path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+        return jsonify({"status": "saved", "modified_ns": str(path.stat().st_mtime_ns)})
+    except (OSError, ValueError, InvalidFileException, BadZipFile) as exc:
+        app.logger.exception("Could not save billing workbook %s", path)
+        return jsonify({"error": f"Could not save workbook: {exc}"}), 500
 
 
 @app.route("/api/health", methods=["GET"])
